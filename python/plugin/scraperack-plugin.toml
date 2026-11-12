@@ -1,0 +1,6 @@
+name = "python"
+version = "0.1.0"
+description = "Python execution environments: package sets built once into cached disks, run functions with the scraperack SDK."
+run = ["python3", "service.py"]
+gui = true
+guest = "guest"
