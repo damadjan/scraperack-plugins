@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Python environments</title>
+<style>
+  :root { --base: #080808; --surface: #111; --surface-2: #181818; --line: #303030; --muted: #969696;
+          --accent: #14b8a6; --text: #ededed; --danger: #ef4444; --warn: #f59e0b; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 6px 8px; background: var(--base); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+  label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+  input, select, textarea { background: var(--surface-2); color: var(--text); border: 1px solid #3b3b3b;
+         border-radius: 5px; padding: 7px 8px; font: inherit; min-width: 0; }
+  input[type=number] { width: 110px; }
+  textarea { width: 100%; min-height: 64px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .wide { flex: 1 1 220px; }
+  .check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); font-size: 13px; padding-bottom: 8px; }
+  button { background: var(--accent); color: #031; border: 0; border-radius: 5px; padding: 8px 14px;
+           font: inherit; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid #4b4b4b; }
+  button.warn { background: transparent; color: var(--warn); border: 1px solid #854d0e; }
+  button.danger { background: transparent; color: #fca5a5; border: 1px solid #991b1b; }
+  button:disabled { opacity: .5; cursor: progress; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #292929; white-space: nowrap; }
+  th { background: #191919; color: #aaa; font-weight: 500; font-size: 13px; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #242424; }
+  .pill { border: 1px solid #4b4b4b; border-radius: 999px; padding: 2px 9px; font-size: 12px; }
+  .ready { color: #6ee7b7; border-color: #166534; background: #052e1b; }
+  .syncing { color: #fcd34d; border-color: #854d0e; background: #422006; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .status { min-height: 20px; margin-top: 6px; white-space: pre-wrap; }
+  .error { color: #fca5a5; }
+  .scroll { overflow-x: auto; }
+  .head { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
+  .head .space { flex: 1; }
+</style>
+</head>
+<body>
+<div class="panel">
+  <div class="head"><h2 id="form-title">Create Python environment</h2><span class="space"></span>
+    <button class="secondary" id="cancel" hidden>New environment</button></div>
+  <div class="muted">Packages are installed once into an immutable disk that every node caches.
+    Run code with <span class="mono">cluster.run("&lt;name&gt;", fn, args)</span>.</div>
+  <form id="form">
+    <div class="row" style="margin-top:8px">
+      <label class="wide">Name<input name="env_name" required></label>
+      <label class="wide">Image<select name="image" required></select></label>
+      <label>CPU cores<input name="cpu" type="number" min="0.01" step="0.05" value="1"></label>
+      <label>Memory MiB<input name="memory_mib" type="number" min="64" step="64" value="512"></label>
+      <label>Disk MiB<input name="disk_mib" type="number" min="64" step="64" value="1024"></label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label>Warm instances<input name="warm_instances" type="number" min="0" value="0"></label>
+      <label>Max instances<input name="max_instances" type="number" min="1" value="8"></label>
+      <label>Timeout sec<input name="timeout_secs" type="number" min="1" value="300"></label>
+      <label>Idle timeout sec<input name="idle_timeout_secs" type="number" min="0" value="30"></label>
+      <label class="check"><input name="reuse" type="checkbox" checked> Reuse VMs</label>
+      <label class="check"><input name="network" type="checkbox" checked> Networking</label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <label class="wide">Python packages<textarea name="packages" placeholder="httpx==0.28.1&#10;beautifulsoup4==4.14.2"></textarea></label>
+      <label class="wide">Preload modules<textarea name="preload" placeholder="httpx&#10;bs4"></textarea></label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button type="submit" id="save">Create environment</button>
+      <button type="button" class="warn" id="restart" hidden>Restart VMs</button>
+      <button type="button" class="danger" id="delete" hidden>Delete</button>
+    </div>
+    <div class="status muted" id="status"></div>
+  </form>
+</div>
+<div class="head"><h2>Python environments</h2><span class="space"></span>
+  <span class="muted">Click an environment to edit it</span></div>
+<div class="scroll">
+<table>
+  <thead><tr><th>Name</th><th>Image</th><th>Packages</th><th>Distributed</th><th>CPU</th>
+    <th>Memory MiB</th><th>Warm</th><th>Max</th><th>Network</th><th>ID</th></tr></thead>
+  <tbody id="rows"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
+</table>
+</div>
+<script>
+const form = document.getElementById("form");
+const status = document.getElementById("status");
+let images = {}, environments = [], editing = null;
+
+const escape = value => String(value ?? "").replace(/[&<>"']/g, c =>
+  ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
+async function api(method, path, body) {
+  const response = await fetch(`api/${path}`, {method, headers: {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) throw new Error(data?.error || response.statusText);
+  return data;
+}
+
+function setStatus(text, error = false) {
+  status.textContent = text;
+  status.className = `status ${error ? "error" : "muted"}`;
+}
+
+async function loadImages() {
+  const list = await api("GET", "images");
+  images = Object.fromEntries(list.map(image => [image.id, image]));
+  const select = form.image, current = select.value;
+  select.innerHTML = list.filter(image => image.ready)
+    .map(image => `<option value="${escape(image.id)}">${escape(image.name)}</option>`).join("");
+  if (current) select.value = current;
+}
+
+async function refresh() {
+  try {
+    environments = await api("GET", "environments");
+  } catch (error) {
+    document.getElementById("rows").innerHTML =
+      `<tr><td colspan="10" class="error">${escape(error.message)}</td></tr>`;
+    return;
+  }
+  document.getElementById("rows").innerHTML = environments.length ? environments.map(env => `
+    <tr data-id="${escape(env.id)}">
+      <td>${escape(env.name)}</td><td>${escape(images[env.image]?.name || env.image.slice(0, 8))}</td>
+      <td>${env.packages.length}</td>
+      <td><span class="pill ${env.ready ? "ready" : "syncing"}">${env.ready ? "ready" : "syncing"}</span></td>
+      <td>${env.cpu_millis / 1000}</td><td>${env.memory_mib}</td><td>${env.warm_instances}</td>
+      <td>${env.max_instances ?? "—"}</td><td>${env.network ? "yes" : "no"}</td>
+      <td class="mono">${escape(env.id)}</td>
+    </tr>`).join("") : `<tr><td colspan="10" class="muted">No environments yet</td></tr>`;
+}
+
+function edit(env) {
+  editing = env;
+  document.getElementById("form-title").textContent = env ? `Edit ${env.name}` : "Create Python environment";
+  document.getElementById("save").textContent = env ? "Save changes" : "Create environment";
+  for (const id of ["cancel", "restart", "delete"]) document.getElementById(id).hidden = !env;
+  const value = env || {name: "", cpu_millis: 1000, memory_mib: 512, disk_mib: 1024, warm_instances: 0,
+    max_instances: 8, timeout_secs: 300, idle_timeout_secs: 30, reuse: true, network: true,
+    packages: [], preload: [], image: form.image.value};
+  form.env_name.value = value.name;
+  if (value.image) form.image.value = value.image;
+  form.cpu.value = value.cpu_millis / 1000;
+  for (const field of ["memory_mib", "disk_mib", "warm_instances", "timeout_secs", "idle_timeout_secs"])
+    form[field].value = value[field];
+  form.max_instances.value = value.max_instances ?? "";
+  form.reuse.checked = value.reuse;
+  form.network.checked = value.network;
+  form.packages.value = value.packages.join("\n");
+  form.preload.value = value.preload.join("\n");
+  setStatus("");
+  window.scrollTo({top: 0, behavior: "smooth"});
+}
+
+function body() {
+  const lines = text => text.split(/[\n,]/).map(item => item.trim()).filter(Boolean);
+  return {
+    name: form.env_name.value.trim(), image: form.image.value,
+    cpu_millis: Math.round(Number(form.cpu.value) * 1000), memory_mib: Number(form.memory_mib.value),
+    disk_mib: Number(form.disk_mib.value), warm_instances: Number(form.warm_instances.value),
+    max_instances: form.max_instances.value === "" ? null : Number(form.max_instances.value),
+    timeout_secs: Number(form.timeout_secs.value), idle_timeout_secs: Number(form.idle_timeout_secs.value),
+    reuse: form.reuse.checked, network: form.network.checked,
+    packages: lines(form.packages.value), preload: lines(form.preload.value),
+  };
+}
+
+async function busy(button, message, action) {
+  const buttons = form.querySelectorAll("button");
+  buttons.forEach(item => item.disabled = true);
+  setStatus(message);
+  try { await action(); } catch (error) { setStatus(error.message, true); }
+  finally { buttons.forEach(item => item.disabled = false); }
+}
+
+form.addEventListener("submit", event => {
+  event.preventDefault();
+  busy(document.getElementById("save"),
+    editing ? "Saving… packages are rebuilt if they changed" : "Building environment… installing packages can take a few minutes",
+    async () => {
+      const updating = Boolean(editing);
+      const saved = updating ? await api("PUT", `environments/${encodeURIComponent(editing.id)}`, body())
+                             : await api("POST", "environments", body());
+      await refresh();
+      edit(null);
+      setStatus(`${updating ? "Saved" : "Created"} ${saved.name}`);
+    });
+});
+document.getElementById("cancel").onclick = () => edit(null);
+document.getElementById("restart").onclick = () => busy(null, "Restarting VMs…", async () => {
+  await api("POST", `environments/${encodeURIComponent(editing.id)}/restart`);
+  setStatus(`Restarted ${editing.name}; new microVMs start in the background`);
+});
+document.getElementById("delete").onclick = () => {
+  if (!confirm(`Delete environment ${editing.name}?`)) return;
+  busy(null, "Deleting…", async () => {
+    await api("DELETE", `environments/${encodeURIComponent(editing.id)}`);
+    const name = editing.name;
+    edit(null);
+    await refresh();
+    setStatus(`Deleted ${name}`);
+  });
+};
+document.getElementById("rows").addEventListener("click", event => {
+  const row = event.target.closest("tr[data-id]");
+  if (row) edit(environments.find(env => env.id === row.dataset.id));
+});
+
+loadImages().then(refresh).catch(error => setStatus(error.message, true));
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
