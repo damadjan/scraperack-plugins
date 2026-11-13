@@ -1,4 +1,4 @@
-# ScrapeRack plugins documentation
+# Scraperack plugins documentation
 
 | Page | What it covers |
 |---|---|

@@ -1,6 +1,6 @@
-# ScrapeRack plugins
+# Scraperack plugins
 
-Plugins for [ScrapeRack](https://github.com/damadjan/scraperack). The core only runs
+Plugins for [Scraperack](https://github.com/damadjan/scraperack). The core only runs
 microVMs; a plugin adds a workload type: what runs in the microVMs, its own page in the
 GUI, its own API, and an SDK.
 
@@ -14,7 +14,7 @@ GUI, its own API, and an SDK.
 tar -czf python-plugin.tar.gz -C python/plugin .
 ```
 
-Install the archive from **Plugins → Install plugin** in the ScrapeRack GUI, create an
+Install the archive from **Plugins → Install plugin** in the Scraperack GUI, create an
 environment on the plugin's page, then:
 
 ```python

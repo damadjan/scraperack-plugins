@@ -1,15 +1,15 @@
 # Python plugin
 
-Runs Python functions in ScrapeRack microVMs. Install it from
+Runs Python functions in Scraperack microVMs. Install it from
 [`python/plugin`](../python/plugin) ([how](installing-plugins.md)) and call it with the
 [Python SDK](python-sdk.md). It needs Docker on the controller to build package disks,
-which the ScrapeRack installer sets up, and has no dependencies of its own.
+which the Scraperack installer sets up, and has no dependencies of its own.
 
 ## Environments
 
 An environment is an imported image, a pinned set of pip packages, resource limits, and
 scaling rules. Packages are installed once into a virtualenv, stored as a read-only disk
-that every node caches. Each environment is one ScrapeRack pool; its name and ID both work
+that every node caches. Each environment is one Scraperack pool; its name and ID both work
 wherever an environment is expected.
 
 | Setting | Default | Meaning |

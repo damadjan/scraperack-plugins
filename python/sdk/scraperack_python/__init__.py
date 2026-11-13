@@ -1,4 +1,4 @@
-"""Run Python functions on ScrapeRack through the Python plugin."""
+"""Run Python functions on Scraperack through the Python plugin."""
 from .client import AsyncPython, Python, RemoteError, decode, function_payload
 from .types import (
     EncodedValue,
