@@ -87,6 +87,8 @@ class FakeCore:
             return None
         if path == "/v1/images":
             return self.images
+        if path == "/v1/nodes":
+            return [{"id": "node-1", "name": "worker-a"}]
         raise AssertionError(f"unexpected call {method} {path}")
 
 
@@ -133,9 +135,10 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(filtered), 1)
 
         self.core.tasks[execution["id"]].update(status="succeeded", started_at_ms=10,
-                                                 finished_at_ms=35)
+                                                 finished_at_ms=35, node="node-1")
         _, details = self.request("GET", f'/api/executions/{execution["id"]}')
         self.assertEqual(details["duration_ms"], 25)
+        self.assertEqual(details["node_name"], "worker-a")
         self.assertEqual(details["logs"]["stdout"], "hello\n")
         self.assertEqual(details["result"], {"encoding": "json", "data": 42})
         with self.assertRaises(self.service.ApiError) as hidden:

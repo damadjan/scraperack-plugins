@@ -495,7 +495,15 @@ def environments_by_pool():
         return {environment["pool"]: environment for environment in load_state().values()}
 
 
-def execution_view(task, environments, function):
+def node_names():
+    """Node id → name, so executions show the node people recognise."""
+    try:
+        return {node["id"]: node["name"] for node in core("GET", "/v1/nodes")}
+    except ApiError:
+        return {}
+
+
+def execution_view(task, environments, function, nodes=None):
     environment = environments.get(task["pool"])
     end = task.get("finished_at_ms")
     start = task.get("started_at_ms")
@@ -509,6 +517,7 @@ def execution_view(task, environments, function):
         "file": function.get("file"),
         "encoding": function.get("encoding"),
         "node": task.get("node"),
+        "node_name": (nodes or {}).get(task.get("node")),
         "error": task.get("error"),
         "created_at_ms": task["created_at_ms"],
         "started_at_ms": start,
@@ -540,10 +549,11 @@ def list_executions(query):
             params["pool"] = find(load_state(), environment)["pool"]
     tasks = core("GET", "/v1/tasks?" + urlencode(params))
     environments = environments_by_pool()
+    nodes = node_names()
     with function_lock:
         cache = load_functions()
         before = len(cache)
-        views = [execution_view(task, environments, function_of(task["id"], cache))
+        views = [execution_view(task, environments, function_of(task["id"], cache), nodes)
                  for task in tasks]
         if len(cache) != before and not environment:
             function_cache = save_functions(cache, {task["id"] for task in tasks})
@@ -573,7 +583,7 @@ def execution_details(task_id):
     task = owned_task(task_id)
     with function_lock:
         function = function_of(task["id"], load_functions())
-    view = execution_view(task, environments_by_pool(), function)
+    view = execution_view(task, environments_by_pool(), function, node_names())
     view["logs"] = core("GET", f"/v1/tasks/{task['id']}/logs")
     view["result"] = None
     if task["status"] in FINISHED:
