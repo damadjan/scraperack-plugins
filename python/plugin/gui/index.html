@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Python environments</title>
+<title>Python</title>
 <style>
   :root { --base: #080808; --surface: #111; --surface-2: #181818; --line: #303030; --muted: #969696;
           --accent: #14b8a6; --text: #ededed; --danger: #ef4444; --warn: #f59e0b; }
@@ -41,9 +41,46 @@
   .scroll { overflow-x: auto; }
   .head { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
   .head .space { flex: 1; }
+  .tabs { display: flex; gap: 4px; margin: 2px 0 8px; border-bottom: 1px solid var(--line); }
+  .tab { background: transparent; color: var(--muted); border: 0; border-bottom: 2px solid transparent;
+         border-radius: 0; padding: 8px 12px; font-weight: 500; }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .succeeded { color: #6ee7b7; border-color: #166534; background: #052e1b; }
+  .failed, .timed_out { color: #fca5a5; border-color: #991b1b; background: #2a0a0a; }
+  .queued, .assigned, .running { color: #fcd34d; border-color: #854d0e; background: #422006; }
+  dialog { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+           width: min(1100px, 96vw); max-height: 92vh; padding: 14px; }
+  dialog::backdrop { background: rgba(0, 0, 0, .6); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin: 10px 0; }
+  .cell { background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .cell .muted { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  pre { background: #0c0c0c; border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin: 4px 0 10px;
+        max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre.error { color: #fca5a5; }
 </style>
 </head>
 <body>
+<div class="tabs">
+  <button class="tab" data-tab="environments">Environments</button>
+  <button class="tab" data-tab="executions">Executions</button>
+</div>
+<section id="tab-executions" hidden>
+<div class="head"><h2>Executions</h2><span class="space"></span>
+  <label style="flex-direction:row;align-items:center;gap:6px">Environment
+    <select id="filter"><option value="">All</option></select></label></div>
+<div class="muted" style="margin-bottom:8px">Python code sent to your environments. Click one for its
+  output, result and errors. Kept for the controller's task retention.</div>
+<div class="scroll">
+<table>
+  <thead><tr><th>Function</th><th>Environment</th><th>Status</th><th>Started</th><th>Duration</th>
+    <th>Node</th><th>ID</th></tr></thead>
+  <tbody id="runs"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+</table>
+</div>
+<dialog id="details"></dialog>
+</section>
+<section id="tab-environments">
 <div class="panel">
   <div class="head"><h2 id="form-title">Create Python environment</h2><span class="space"></span>
     <button class="secondary" id="cancel" hidden>New environment</button></div>
@@ -86,6 +123,7 @@
   <tbody id="rows"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
 </table>
 </div>
+</section>
 <script>
 const form = document.getElementById("form");
 const status = document.getElementById("status");
@@ -212,8 +250,114 @@ document.getElementById("rows").addEventListener("click", event => {
   if (row) edit(environments.find(env => env.id === row.dataset.id));
 });
 
-loadImages().then(refresh).catch(error => setStatus(error.message, true));
-setInterval(refresh, 3000);
+// --- Executions ---------------------------------------------------------------
+const runs = document.getElementById("runs");
+const filter = document.getElementById("filter");
+const details = document.getElementById("details");
+let executions = [], tab = "environments";
+
+const seconds = ms => ms == null ? "—" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`;
+const when = ms => ms ? new Date(ms).toLocaleString() : "—";
+function ago(ms) {
+  if (!ms) return "—";
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  return s < 60 ? `${Math.floor(s)}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago`
+    : s < 86400 ? `${Math.floor(s / 3600)}h ago` : new Date(ms).toLocaleDateString();
+}
+const pill = status => `<span class="pill ${escape(status)}">${escape(status.replace("_", " "))}</span>`;
+const fn = run => run.function ? escape(run.function) : `<span class="muted">${escape(run.encoding || "unknown")}</span>`;
+
+function syncFilter() {
+  const current = filter.value;
+  filter.innerHTML = `<option value="">All</option>` + environments
+    .map(env => `<option value="${escape(env.id)}">${escape(env.name)}</option>`).join("");
+  filter.value = environments.some(env => env.id === current) ? current : "";
+}
+
+async function refreshExecutions() {
+  const query = filter.value ? `&environment=${encodeURIComponent(filter.value)}` : "";
+  try {
+    executions = await api("GET", `executions?limit=300${query}`);
+  } catch (error) {
+    runs.innerHTML = `<tr><td colspan="7" class="error">${escape(error.message)}</td></tr>`;
+    return;
+  }
+  runs.innerHTML = executions.length ? executions.map(run => `
+    <tr data-id="${escape(run.id)}">
+      <td>${fn(run)}</td><td>${escape(run.environment)}</td><td>${pill(run.status)}</td>
+      <td title="${escape(when(run.created_at_ms))}">${ago(run.started_at_ms || run.created_at_ms)}</td>
+      <td>${run.duration_ms != null ? seconds(run.duration_ms)
+           : run.started_at_ms ? seconds(Date.now() - run.started_at_ms) : "—"}</td>
+      <td class="mono">${escape((run.node || "—").slice(0, 8))}</td>
+      <td class="mono">${escape(run.id.slice(0, 8))}</td>
+    </tr>`).join("") : `<tr><td colspan="7" class="muted">No executions yet</td></tr>`;
+}
+
+function showValue(value) {
+  if (value == null) return "—";
+  if (value.encoding === "json") return JSON.stringify(value.data, null, 2);
+  if (value.encoding === "cloudpickle")
+    return `Python object (cloudpickle, ${Math.round((value.data || "").length * 3 / 4)} bytes); decode it with the SDK`;
+  return JSON.stringify(value, null, 2);
+}
+
+async function openExecution(id) {
+  details.innerHTML = `<div class="muted">Loading…</div>`;
+  details.showModal();
+  let run;
+  try { run = await api("GET", `executions/${encodeURIComponent(id)}`); }
+  catch (error) { details.innerHTML = `<div class="error">${escape(error.message)}</div>`; return; }
+  const metrics = run.metrics || {};
+  const cells = [
+    ["Environment", escape(run.environment)], ["Module", escape(run.module || "—")],
+    ["File", `<span class="mono">${escape(run.file || "—")}</span>`],
+    ["Duration", seconds(run.duration_ms)], ["Created", when(run.created_at_ms)],
+    ["Started", when(run.started_at_ms)], ["Finished", when(run.finished_at_ms)],
+    ["Node", `<span class="mono">${escape(run.node || "—")}</span>`],
+    ["Avg CPU", metrics.average_cpu_percent != null ? `${metrics.average_cpu_percent.toFixed(1)} %` : "—"],
+    ["Peak RAM", metrics.peak_memory_percent != null ? `${metrics.peak_memory_percent.toFixed(1)} %` : "—"],
+  ];
+  details.innerHTML = `
+    <div class="head"><h2>${fn(run)}</h2>${pill(run.status)}<span class="space"></span>
+      <span class="mono muted">${escape(run.id)}</span>
+      <button class="secondary" id="close">Close</button></div>
+    <div class="grid">${cells.map(([label, value]) =>
+      `<div class="cell"><div class="muted">${label}</div><div>${value}</div></div>`).join("")}</div>
+    ${run.error ? `<div class="muted">Error</div><pre class="error">${escape(run.error)}</pre>` : ""}
+    <div class="muted">Result</div><pre>${escape(showValue(run.result))}</pre>
+    <div class="muted">stdout</div><pre>${escape(run.logs?.stdout || "—")}</pre>
+    <div class="muted">stderr</div><pre>${escape(run.logs?.stderr || "—")}</pre>`;
+  document.getElementById("close").onclick = () => details.close();
+}
+
+runs.addEventListener("click", event => {
+  const row = event.target.closest("tr[data-id]");
+  if (row) openExecution(row.dataset.id);
+});
+details.addEventListener("click", event => { if (event.target === details) details.close(); });
+filter.onchange = refreshExecutions;
+
+// --- Tabs -----------------------------------------------------------------------
+function show(name) {
+  tab = name === "executions" ? "executions" : "environments";
+  for (const button of document.querySelectorAll(".tab"))
+    button.classList.toggle("active", button.dataset.tab === tab);
+  document.getElementById("tab-environments").hidden = tab !== "environments";
+  document.getElementById("tab-executions").hidden = tab !== "executions";
+  history.replaceState(null, "", `#${tab}`);
+  if (tab === "executions") refreshExecutions();
+}
+for (const button of document.querySelectorAll(".tab")) button.onclick = () => show(button.dataset.tab);
+
+async function tick() {
+  await refresh();
+  syncFilter();
+  if (tab === "executions" && !details.open) await refreshExecutions();
+}
+
+show(location.hash.slice(1));
+loadImages().then(tick).catch(error => setStatus(error.message, true));
+setInterval(tick, 3000);
 </script>
 </body>
 </html>
