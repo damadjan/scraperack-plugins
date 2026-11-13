@@ -2,7 +2,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from scraperack import Cluster
+from scraperack_python import Python
 
 
 def request():
@@ -27,13 +27,13 @@ def peak(executions):
 
 
 levels = [int(value) for value in sys.argv[1:]] or [1, 2, 4, 8, 16, 32]
-cluster = Cluster(url="http://192.168.2.16:7070")
+py = Python("http://192.168.2.15:7070")
 print("sent  peak  ok  total    req/s  p50     p95")
 for concurrency in levels:
     def execute(_):
-        execution = cluster.run(environment="bench2", function=request)
-        value = cluster.result(execution["id"])
-        return cluster.execution(execution["id"]), value
+        execution = py.run(environment="bench2", function=request)
+        value = py.result(execution["id"])
+        return py.execution(execution["id"]), value
 
     start = time.perf_counter()
     with ThreadPoolExecutor(max_workers=concurrency) as pool:
@@ -45,4 +45,4 @@ for concurrency in levels:
     p95 = elapsed[int((len(elapsed) - 1) * .95)] if elapsed else 0
     print(f"{concurrency:>4}  {peak(executions):>4}  {len(elapsed):>2}  "
           f"{total:>6.3f}s  {len(elapsed) / total:>5.1f}  {p50:>6.3f}s  {p95:>6.3f}s")
-cluster.close()
+py.close()

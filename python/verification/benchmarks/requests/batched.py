@@ -1,7 +1,7 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from scraperack import Cluster
+from scraperack_python import Python
 
 
 def request():
@@ -12,12 +12,12 @@ def request():
     return response.status_code, time.perf_counter() - start
 
 
-cluster = Cluster(url="http://192.168.2.16:7070")
+py = Python("http://192.168.2.15:7070")
 
 
 def execute(_):
-    execution = cluster.run(environment="requests", function=request)
-    return cluster.result(execution["id"])
+    execution = py.run(environment="requests", function=request)
+    return py.result(execution["id"])
 
 
 started = time.perf_counter()
@@ -25,7 +25,7 @@ results = []
 with ThreadPoolExecutor(max_workers=10) as pool:
     for _ in range(20):
         results.extend(pool.map(execute, range(10)))
-cluster.close()
+py.close()
 
 roundtrips = [elapsed for _, elapsed in results]
 print(f"requests: {len(results)}")

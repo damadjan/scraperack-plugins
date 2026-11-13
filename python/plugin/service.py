@@ -43,7 +43,7 @@ VENV_MOUNT = "/tmp/environment"
 GUEST_MOUNT = "/tmp/scraperack/python"
 STATE = DATA / "environments.json"
 MIGRATED = DATA / "migrated-environments.json"
-FUNCTIONS = DATA / "execution-functions.json"
+FUNCTIONS = DATA / "execution-functions-v2.json"
 FINISHED = {"succeeded", "failed", "timed_out"}
 
 DEFAULTS = {
@@ -404,6 +404,26 @@ function_lock = threading.Lock()
 function_cache = None
 
 
+def pickle_strings(data):
+    """Strings a pickle pushes, in order, with memo references resolved. Runs nothing."""
+    strings, memo, last = [], {}, None
+    for op, arg, _ in pickletools.genops(data):
+        if op.name in ("GET", "BINGET", "LONG_BINGET"):
+            last = memo.get(int(arg))
+            if isinstance(last, str):
+                strings.append(last)
+        elif op.name == "MEMOIZE":
+            memo[len(memo)] = last
+        elif op.name in ("PUT", "BINPUT", "LONG_BINPUT"):
+            memo[int(arg)] = last
+        elif isinstance(arg, str) and "UNICODE" in op.name:
+            strings.append(arg)
+            last = arg
+        else:
+            last = None
+    return strings
+
+
 def describe_payload(payload):
     """Name the Python code in a payload without unpickling it."""
     encoding = (payload or {}).get("encoding")
@@ -420,15 +440,22 @@ def describe_payload(payload):
         return info
     try:
         data = base64.b64decode(payload["function" if encoding == "python-function" else "data"])
-        strings = [arg for _, arg, _ in pickletools.genops(data) if isinstance(arg, str)]
+        strings = pickle_strings(data)
     except (KeyError, TypeError, ValueError, binascii.Error):
         return info
     if "_make_function" in strings:
-        after = {key: strings[index + 1] for index, key in enumerate(strings[:-1])
-                 if key in ("__qualname__", "__name__")}
+        after = {}
+        for index, key in enumerate(strings[:-1]):
+            if key in ("__qualname__", "__module__", "__name__"):
+                after.setdefault(key, strings[index + 1])
         info["function"] = after.get("__qualname__")
-        info["module"] = after.get("__name__")
-        info["file"] = next((value for value in strings if value.endswith(".py")), None)
+        info["module"] = after.get("__module__") or after.get("__name__")
+        # A code object stores co_filename right before co_name; string constants
+        # inside the function come earlier, so match on the pair.
+        short = (info["function"] or "").rsplit(".", 1)[-1]
+        info["file"] = next((strings[index - 1] for index, value in enumerate(strings)
+                             if index and value == short and strings[index - 1].endswith(".py")),
+                            None)
     elif len(strings) >= 2:
         info["module"], info["function"] = strings[0], strings[1]
     return info

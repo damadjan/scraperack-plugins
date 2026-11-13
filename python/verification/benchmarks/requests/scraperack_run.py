@@ -1,7 +1,7 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from scraperack import Cluster
+from scraperack_python import Python
 
 
 def get():
@@ -12,18 +12,18 @@ def get():
     return response.status_code, time.perf_counter() - start
 
 
-cluster = Cluster(url="http://192.168.2.16:7070")
+py = Python("http://192.168.2.15:7070")
 
 
 def execute(_):
-    execution = cluster.run(environment="requests", function=get)
-    return cluster.result(execution["id"])
+    execution = py.run(environment="requests", function=get)
+    return py.result(execution["id"])
 
 
 start = time.perf_counter()
 with ThreadPoolExecutor(max_workers=2) as pool:
     results = list(pool.map(execute, range(2)))
-cluster.close()
+py.close()
 
 print(f"total: {time.perf_counter() - start:.3f}s")
 for status, elapsed in results:

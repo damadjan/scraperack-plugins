@@ -11,7 +11,7 @@ and errors.
 
 ```
 plugin/         the installable plugin (pack this folder)
-sdk/            the `scraperack` Python client
+sdk/            `scraperack-python`, the SDK for this plugin (builds on the core `scraperack` client)
 verification/   end-to-end checks and benchmarks
 tests/          plugin unit tests
 ```
@@ -31,20 +31,27 @@ IDs, names, and warm microVMs.
 
 ## Use
 
-```python
-from scraperack import Cluster
+```sh
+pip install scraperack-python
+```
 
-cluster = Cluster("http://controller:7070")
-image = next(i for i in cluster.images() if i["name"] == "python-runtime")
-cluster.create_environment("scrapers", image["id"], packages=["httpx==0.28.1"], warm=2)
+```python
+from scraperack_python import Python
+
+py = Python("http://controller:7070")
+image = next(i for i in py.cluster.images() if i["name"] == "python-runtime")
+py.create_environment("scrapers", image["id"], packages=["httpx==0.28.1"], warm=2)
 
 def fetch(url):
     import httpx
     return httpx.get(url).status_code
 
-execution = cluster.run("scrapers", fetch, ("https://example.com",))
-print(cluster.result(execution["id"]))
+execution = py.run("scrapers", fetch, ("https://example.com",))
+print(py.result(execution["id"]))
+print(py.call("scrapers", fetch, "https://example.com"))  # run and wait
 ```
+
+See [`sdk/README.md`](sdk/README.md) for executions, async use, and working directories.
 
 Code can read invocation-scoped values with `scraperack_runtime.variable("NAME")` and
 `scraperack_runtime.secret("NAME")`.
@@ -71,5 +78,6 @@ and schedules it; this plugin decides what it means and shows only its own.
 
 ```sh
 python -m unittest discover -s python/tests
+pip install ../scraperack/sdk ./python/sdk   # the core client, then this SDK
 (cd python/sdk && python -m unittest discover -s tests)
 ```

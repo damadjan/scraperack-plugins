@@ -1,21 +1,20 @@
-# ScrapeRack SDK
+# scraperack-python
 
-Python client for submitting trusted Python functions to a self-hosted ScrapeRack cluster.
+Run Python functions on a self-hosted ScrapeRack cluster. This is the SDK of the
+[Python plugin](..): it manages environments (package sets with warm microVMs) and runs
+functions in them as executions. It builds on [`scraperack`](https://github.com/damadjan/scraperack/tree/main/sdk),
+the core client, which stays available as `py.cluster`.
 
 > ScrapeRack is alpha software. Use it on trusted infrastructure and expect breaking changes.
 
-## Install
-
 ```sh
-pip install scraperack
+pip install scraperack-python
 ```
 
 ## Run a function
 
-The environment must already exist on the cluster.
-
 ```python
-from scraperack import Cluster
+from scraperack_python import Python
 
 
 def add(a, b):
@@ -26,23 +25,41 @@ def add(a, b):
     return a + b
 
 
-cluster = Cluster("http://controller:7070")
-try:
-    execution = cluster.run(
-        "python",
+with Python("http://controller:7070") as py:
+    execution = py.run(
+        "scrapers",                     # environment name or ID
         add,
         (2, 3),
         working_dir="./project",
         variables={"LOG_LEVEL": "DEBUG"},
         secrets={"DATABASE_URL": "postgresql://..."},
     )
-    print(cluster.result(execution["id"]))
-finally:
-    cluster.close()
+    print(py.result(execution["id"]))   # 5, or RemoteError with the traceback
+    print(py.logs(execution["id"])["stdout"])
+
+    print(py.call("scrapers", add, 2, 3))   # run and wait in one step
 ```
 
-`working_dir` uploads project modules and files using a content-addressed cache. It is
-made importable and becomes the current directory for the invocation. Third-party
-packages still belong in the selected ScrapeRack environment.
+`working_dir` uploads project modules and files once, content-addressed. It is made
+importable and becomes the current directory for the execution. Third-party packages
+belong in the environment.
 
-Installation, cluster setup, and source code are available at [github.com/damadjan/scraperack](https://github.com/damadjan/scraperack).
+## Environments
+
+```python
+image = next(i for i in py.cluster.images() if i["name"] == "python-runtime")
+py.create_environment("scrapers", image["id"], packages=["httpx==0.28.1"], warm=2)
+py.update_environment("scrapers", warm=4)
+py.environments()
+py.delete_environment("scrapers")
+```
+
+## Executions
+
+```python
+for execution in py.executions(environment="scrapers", limit=20):
+    print(execution["function"], execution["status"], execution["duration_ms"])
+details = py.execution(execution_id)   # adds logs and the encoded result
+```
+
+`AsyncPython` has the same methods for `asyncio`.

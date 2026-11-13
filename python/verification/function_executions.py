@@ -1,6 +1,6 @@
 import os
 
-from scraperack import Cluster
+from scraperack_python import Python
 
 
 def hello(name):
@@ -20,7 +20,7 @@ def python_version():
     return sys.version
 
 
-cluster = Cluster("http://192.168.2.16:7070")
+py = Python("http://192.168.2.15:7070")
 environment = os.getenv("SCRAPERACK_ENVIRONMENT", "python")
 jobs = [
     (python_version, ()),
@@ -31,7 +31,7 @@ jobs = [
 
 try:
     for function, params in jobs:
-        execution = cluster.run(environment, function, params)
-        print(function.__name__, cluster.result(execution["id"]))
+        execution = py.run(environment, function, params)
+        print(function.__name__, py.result(execution["id"]))
 finally:
-    cluster.close()
+    py.close()
