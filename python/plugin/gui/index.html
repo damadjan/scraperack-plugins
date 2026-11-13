@@ -50,6 +50,7 @@
   .queued, .assigned, .running { color: #fcd34d; border-color: #854d0e; background: #422006; }
   dialog { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
            width: min(1100px, 96vw); max-height: 92vh; padding: 14px; }
+  dialog.editor { width: min(860px, 96vw); }
   dialog::backdrop { background: rgba(0, 0, 0, .6); }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin: 10px 0; }
   .cell { background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
@@ -81,16 +82,27 @@
 <dialog id="details"></dialog>
 </section>
 <section id="tab-environments">
-<div class="panel">
+<div class="head"><h2>Python environments</h2><span class="space"></span>
+  <span class="muted">Click an environment to edit it</span>
+  <button id="new">New environment</button></div>
+<div class="status muted" id="notice"></div>
+<div class="scroll">
+<table>
+  <thead><tr><th>Name</th><th>Image</th><th>Packages</th><th>Distributed</th><th>CPU</th>
+    <th>Memory MiB</th><th>Warm</th><th>Max</th><th>Network</th><th>ID</th></tr></thead>
+  <tbody id="rows"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
+</table>
+</div>
+<dialog id="editor" class="editor">
   <div class="head"><h2 id="form-title">Create Python environment</h2><span class="space"></span>
-    <button class="secondary" id="cancel" hidden>New environment</button></div>
+    <button type="button" class="secondary" id="cancel">Close</button></div>
   <div class="muted">Packages are installed once into an immutable disk that every node caches.
     Run code with <span class="mono">cluster.run("&lt;name&gt;", fn, args)</span>.</div>
   <form id="form">
     <div class="row" style="margin-top:8px">
       <label class="wide">Name<input name="env_name" required></label>
       <label class="wide">Image<select name="image" required></select></label>
-      <label>CPU cores<input name="cpu" type="number" min="0.01" step="0.05" value="1"></label>
+      <label>CPU cores<input name="cpu" type="number" min="0.01" step="0.01" value="1"></label>
       <label>Memory MiB<input name="memory_mib" type="number" min="64" step="64" value="512"></label>
       <label>Disk MiB<input name="disk_mib" type="number" min="64" step="64" value="1024"></label>
     </div>
@@ -113,21 +125,14 @@
     </div>
     <div class="status muted" id="status"></div>
   </form>
-</div>
-<div class="head"><h2>Python environments</h2><span class="space"></span>
-  <span class="muted">Click an environment to edit it</span></div>
-<div class="scroll">
-<table>
-  <thead><tr><th>Name</th><th>Image</th><th>Packages</th><th>Distributed</th><th>CPU</th>
-    <th>Memory MiB</th><th>Warm</th><th>Max</th><th>Network</th><th>ID</th></tr></thead>
-  <tbody id="rows"><tr><td colspan="10" class="muted">Loading…</td></tr></tbody>
-</table>
-</div>
+</dialog>
 </section>
 <script>
 const form = document.getElementById("form");
 const status = document.getElementById("status");
-let images = {}, environments = [], editing = null;
+const editor = document.getElementById("editor");
+const notice = document.getElementById("notice");
+let images = {}, environments = [], editing = null, working = false;
 
 const escape = value => String(value ?? "").replace(/[&<>"']/g, c =>
   ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
@@ -144,6 +149,11 @@ async function api(method, path, body) {
 function setStatus(text, error = false) {
   status.textContent = text;
   status.className = `status ${error ? "error" : "muted"}`;
+}
+
+function setNotice(text, error = false) {
+  notice.textContent = text;
+  notice.className = `status ${error ? "error" : "muted"}`;
 }
 
 async function loadImages() {
@@ -178,7 +188,7 @@ function edit(env) {
   editing = env;
   document.getElementById("form-title").textContent = env ? `Edit ${env.name}` : "Create Python environment";
   document.getElementById("save").textContent = env ? "Save changes" : "Create environment";
-  for (const id of ["cancel", "restart", "delete"]) document.getElementById(id).hidden = !env;
+  for (const id of ["restart", "delete"]) document.getElementById(id).hidden = !env;
   const value = env || {name: "", cpu_millis: 1000, memory_mib: 512, disk_mib: 1024, warm_instances: 0,
     max_instances: 8, timeout_secs: 300, idle_timeout_secs: 30, reuse: true, network: true,
     packages: [], preload: [], image: form.image.value};
@@ -193,7 +203,16 @@ function edit(env) {
   form.packages.value = value.packages.join("\n");
   form.preload.value = value.preload.join("\n");
   setStatus("");
-  window.scrollTo({top: 0, behavior: "smooth"});
+  setNotice("");
+  if (!editor.open) editor.showModal();
+  form.env_name.focus();
+}
+
+function closeEditor(message) {
+  if (working) return;
+  editor.close();
+  editing = null;
+  if (message) setNotice(message);
 }
 
 function body() {
@@ -210,11 +229,12 @@ function body() {
 }
 
 async function busy(button, message, action) {
-  const buttons = form.querySelectorAll("button");
+  const buttons = editor.querySelectorAll("button");
   buttons.forEach(item => item.disabled = true);
+  working = true;
   setStatus(message);
   try { await action(); } catch (error) { setStatus(error.message, true); }
-  finally { buttons.forEach(item => item.disabled = false); }
+  finally { working = false; buttons.forEach(item => item.disabled = false); }
 }
 
 form.addEventListener("submit", event => {
@@ -226,11 +246,14 @@ form.addEventListener("submit", event => {
       const saved = updating ? await api("PUT", `environments/${encodeURIComponent(editing.id)}`, body())
                              : await api("POST", "environments", body());
       await refresh();
-      edit(null);
-      setStatus(`${updating ? "Saved" : "Created"} ${saved.name}`);
+      working = false;
+      closeEditor(`${updating ? "Saved" : "Created"} ${saved.name}`);
     });
 });
-document.getElementById("cancel").onclick = () => edit(null);
+document.getElementById("new").onclick = () => edit(null);
+document.getElementById("cancel").onclick = () => closeEditor();
+// Esc closes the editor, except while a build or save is still running.
+editor.addEventListener("cancel", event => { event.preventDefault(); closeEditor(); });
 document.getElementById("restart").onclick = () => busy(null, "Restarting VMs…", async () => {
   await api("POST", `environments/${encodeURIComponent(editing.id)}/restart`);
   setStatus(`Restarted ${editing.name}; new microVMs start in the background`);
@@ -240,9 +263,9 @@ document.getElementById("delete").onclick = () => {
   busy(null, "Deleting…", async () => {
     await api("DELETE", `environments/${encodeURIComponent(editing.id)}`);
     const name = editing.name;
-    edit(null);
     await refresh();
-    setStatus(`Deleted ${name}`);
+    working = false;
+    closeEditor(`Deleted ${name}`);
   });
 };
 document.getElementById("rows").addEventListener("click", event => {
@@ -356,7 +379,7 @@ async function tick() {
 }
 
 show(location.hash.slice(1));
-loadImages().then(tick).catch(error => setStatus(error.message, true));
+loadImages().then(tick).catch(error => setNotice(error.message, true));
 setInterval(tick, 3000);
 </script>
 </body>
