@@ -1,10 +1,13 @@
+import base64
 import importlib
 import json
 import os
+import pickle
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 PLUGIN = Path(__file__).resolve().parents[1] / "plugin"
 
@@ -18,10 +21,48 @@ class FakeCore:
         self.images = [{"id": "img", "name": "python", "sha256": "abc", "ready": True,
                         "docker_source": "sha256:1"}]
         self.calls = []
+        self.tasks = {}
+
+    def tasks_api(self, method, path, body):
+        service = sys.modules["service"]
+        url = urlsplit(path)
+        parts = url.path.strip("/").split("/")[2:]
+        if not parts and method == "POST":
+            pool = self.pools[body["pool"]]
+            task = {"id": f"task-{len(self.tasks) + 1}", "pool": pool["name"],
+                    "owner": "plugin:python", "status": "queued", "node": None, "error": None,
+                    "created_at_ms": len(self.tasks), "started_at_ms": None,
+                    "finished_at_ms": None, "metrics": None, "payload": body["payload"]}
+            self.tasks[task["id"]] = task
+            return self.view(task)
+        if not parts and method == "GET":
+            query = parse_qs(url.query)
+            pools = query.get("pool", [""])[0].split(",") if "pool" in query else None
+            return [self.view(task) for task in reversed(self.tasks.values())
+                    if task["owner"] == query["owner"][0]
+                    and (pools is None or task["pool"] in pools)]
+        task = self.tasks.get(parts[0])
+        if task is None:
+            raise service.ApiError(404, "task not found")
+        if len(parts) == 1:
+            return self.view(task)
+        if parts[1] == "payload":
+            return task["payload"]
+        if parts[1] == "logs":
+            return {"stdout": "hello\n", "stderr": ""}
+        if parts[1] == "result":
+            return {"status": task["status"], "value": {"encoding": "json", "data": 42}, "error": None}
+        raise AssertionError(path)
+
+    @staticmethod
+    def view(task):
+        return {key: value for key, value in task.items() if key != "payload"}
 
     def __call__(self, method, path, body=None, file=None, timeout=120):
         service = sys.modules["service"]
         self.calls.append((method, path))
+        if path.startswith("/v1/tasks"):
+            return self.tasks_api(method, path, body)
         if path == "/v1/pools" and method == "GET":
             return [{**pool, "ready": True} for pool in self.pools.values()]
         if path == "/v1/pools" and method == "POST":
@@ -65,8 +106,56 @@ class ServiceTests(unittest.TestCase):
         sys.path.remove(str(PLUGIN))
         self.directory.cleanup()
 
-    def request(self, method, path, body=None):
-        return self.service.route(method, path, body or {})
+    def request(self, method, path, body=None, query=None):
+        return self.service.route(method, path, body or {}, query)
+
+    def test_executions_are_core_tasks_shown_as_python(self):
+        _, environment = self.request("POST", "/api/environments", {"name": "jobs", "image": "img"})
+        function = base64.b64encode(pickle.dumps(os.path.join)).decode()
+        status, execution = self.request("POST", "/api/executions", {
+            "environment": "jobs",
+            "payload": {"encoding": "python-function", "function": function, "hash": "x",
+                        "params": ""},
+        })
+        self.assertEqual(status, 202)
+        self.assertEqual(execution["environment"], "jobs")
+        self.assertEqual(execution["function"], "join")
+        self.assertEqual(self.core.tasks[execution["id"]]["pool"], environment["pool"])
+
+        self.core.tasks["foreign"] = {**self.core.tasks[execution["id"]], "id": "foreign",
+                                      "owner": "plugin:other"}
+        self.service.function_cache = None
+        status, listed = self.request("GET", "/api/executions", query={"limit": ["10"]})
+        self.assertEqual([item["id"] for item in listed], [execution["id"]])
+        self.assertEqual(listed[0]["function"], "join")
+        _, filtered = self.request("GET", "/api/executions",
+                                   query={"environment": [environment["id"]]})
+        self.assertEqual(len(filtered), 1)
+
+        self.core.tasks[execution["id"]].update(status="succeeded", started_at_ms=10,
+                                                 finished_at_ms=35)
+        _, details = self.request("GET", f'/api/executions/{execution["id"]}')
+        self.assertEqual(details["duration_ms"], 25)
+        self.assertEqual(details["logs"]["stdout"], "hello\n")
+        self.assertEqual(details["result"], {"encoding": "json", "data": 42})
+        with self.assertRaises(self.service.ApiError) as hidden:
+            self.request("GET", "/api/executions/foreign")
+        self.assertEqual(hidden.exception.status, 404)
+
+    def test_describes_functions_pickled_by_value(self):
+        # Opcode strings as cloudpickle writes a function defined in __main__.
+        strings = ["cloudpickle.cloudpickle", "_make_function", "_builtin_type", "CodeType",
+                   "url", "/app/jobs.py", "scrape", "scrape", "__package__", "__name__",
+                   "__main__", "__file__", "_function_setstate", "scrape", "__qualname__",
+                   "Spider.scrape", "__module__"]
+        data = pickle.dumps(strings)
+        info = self.service.describe_payload(
+            {"encoding": "python-function", "function": base64.b64encode(data).decode()})
+        self.assertEqual(info["function"], "Spider.scrape")
+        self.assertEqual(info["module"], "__main__")
+        self.assertEqual(info["file"], "/app/jobs.py")
+        self.assertIsNone(self.service.describe_payload({"encoding": "python-function",
+                                                         "function": "!!"})["function"])
 
     def test_creates_environment_pool_with_executor_disks_and_aliases(self):
         status, environment = self.request("POST", "/api/environments", {

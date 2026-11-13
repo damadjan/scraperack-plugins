@@ -1,11 +1,12 @@
 # ScrapeRack plugins
 
 Public plugins for [ScrapeRack](https://github.com/damadjan/scraperack). A plugin adds a
-workload type to a ScrapeRack cluster without changing the core.
+workload type to a ScrapeRack cluster without changing the core. The core only runs
+microVMs; a plugin owns what runs in them and how users see it.
 
 | Plugin | What it adds |
 |---|---|
-| [`python`](python/) | Python execution environments: package sets built once into cached disks, functions run with the `scraperack` SDK |
+| [`python`](python/) | Python environments and executions: package sets built once into cached disks, functions run with the `scraperack` SDK and listed with their output |
 
 ## Install a plugin
 
@@ -63,7 +64,7 @@ owned by it: only it can change or delete them, and they are removed with the pl
 | `GET/POST /v1/pools`, `GET/PUT/DELETE /v1/pools/{name}`, `POST /v1/pools/{name}/restart` | Pools of microVMs, with `disks`, `executor`, `aliases`, `display_name` |
 | `GET/POST /v1/disks`, `DELETE /v1/disks/{key}` | Upload read-only ext4 disks; nodes download them automatically |
 | `GET /v1/images`, `POST /v1/images/import` | Root filesystems imported from Docker images |
-| `POST /v1/executions`, `GET /v1/executions/{id}/wait` | Send a payload to the pool's executor and wait for the result |
+| `POST /v1/tasks`, `GET /v1/tasks?owner=plugin:<name>`, `GET /v1/tasks/{id}[/wait\|/result\|/logs\|/payload]` | Send an opaque payload to a pool's executor on a warm microVM; tasks on a plugin's pools record it as `owner` |
 | `GET /v1/vms`, `GET /v1/nodes` | Live inventory |
 
 Inside a microVM the guest agent mounts the pool's `disks` (in order) at their `mount`

@@ -1,9 +1,13 @@
-# Python environments plugin
+# Python plugin
 
 Runs Python functions in ScrapeRack microVMs. Each environment combines an imported image,
 a pinned set of pip packages, resource limits, and scaling rules. Packages are installed
 once into a virtualenv disk that every node caches; the plugin needs no dependencies of
 its own.
+
+The plugin page has two tabs: **Environments** to manage them, and **Executions**
+to see every function sent to them, with its status, duration, result, stdout, stderr,
+and errors.
 
 ```
 plugin/         the installable plugin (pack this folder)
@@ -55,8 +59,13 @@ Served by the plugin at `http://<controller>:7070/plugins/python/api/`:
 | `POST /environments` | Create; blocks until packages are built |
 | `GET/PUT/DELETE /environments/{id or name}` | Read, update (rebuilds packages if they changed), delete |
 | `POST /environments/{id or name}/restart` | Replace the environment's microVMs |
+| `GET /executions?environment=&limit=` | Newest executions first, with the function name |
+| `POST /executions` | Run code: `{"environment", "payload", "queue", "variables", "secrets"}` |
+| `GET /executions/{id}` | One execution with logs and result |
+| `GET /executions/{id}/wait`, `/result`, `/logs`, `/payload` | Same as the core task endpoints |
 
-Executions go straight to the core: `POST /v1/executions` with `"environment": "<id or name>"`.
+Each execution is a core task on the environment's pool (`/v1/tasks`). The core stores
+and schedules it; this plugin decides what it means and shows only its own.
 
 ## Develop
 

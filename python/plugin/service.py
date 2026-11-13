@@ -1,15 +1,20 @@
-"""ScrapeRack Python environments plugin.
+"""ScrapeRack Python plugin.
 
-Builds immutable virtualenv disks for Python package sets and keeps one
-ScrapeRack pool per environment. Executions go through the core API
-(``POST /v1/executions`` with the environment ID or name), so the plugin is
-never on the data path.
+Environments: builds immutable virtualenv disks for Python package sets and
+keeps one ScrapeRack pool per environment.
+
+Executions: Python code run in those environments. Each execution is a core
+task on the environment's pool; this plugin owns how they are submitted,
+listed, described and shown.
 
 Standard library only: the plugin installs without downloading anything.
 """
+import base64
+import binascii
 import http.client
 import json
 import os
+import pickletools
 import re
 import shutil
 import socket
@@ -24,9 +29,10 @@ from hashlib import sha256
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from socketserver import ThreadingUnixStreamServer
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlsplit
 
 PLUGIN = os.environ.get("SCRAPERACK_PLUGIN_NAME", "python")
+OWNER = f"plugin:{PLUGIN}"
 PLUGIN_SOCKET = os.environ.get("SCRAPERACK_PLUGIN_SOCKET", "/tmp/scraperack-python.sock")
 CORE_SOCKET = os.environ.get("SCRAPERACK_CORE_SOCKET", "/tmp/scraperack-core.sock")
 DATA = Path(os.environ.get("SCRAPERACK_PLUGIN_DATA", "data"))
@@ -37,6 +43,8 @@ VENV_MOUNT = "/tmp/environment"
 GUEST_MOUNT = "/tmp/scraperack/python"
 STATE = DATA / "environments.json"
 MIGRATED = DATA / "migrated-environments.json"
+FUNCTIONS = DATA / "execution-functions.json"
+FINISHED = {"succeeded", "failed", "timed_out"}
 
 DEFAULTS = {
     "packages": [], "preload": [], "warm_instances": 0, "max_instances": None,
@@ -386,9 +394,184 @@ def reconcile():
             traceback.print_exc()
 
 
+# --- Executions ---------------------------------------------------------------------
+#
+# An execution is a core task on one of this plugin's pools. The core keeps the
+# task (queue, VM, payload, result, logs, metrics); this plugin decides what it
+# means as Python and which ones the user sees.
+
+function_lock = threading.Lock()
+function_cache = None
+
+
+def describe_payload(payload):
+    """Name the Python code in a payload without unpickling it."""
+    encoding = (payload or {}).get("encoding")
+    info = {"encoding": encoding, "function": None, "module": None, "file": None}
+    if encoding == "python-source":
+        match = re.search(r"^def\s+main\s*\(", payload.get("source", ""), re.M)
+        info.update(function="main" if match else "<source>", module="<source>")
+        return info
+    if encoding == "files":
+        command = payload.get("command")
+        info["function"] = command if isinstance(command, str) else " ".join(map(str, command or []))
+        return info
+    if encoding not in ("python-function", "cloudpickle"):
+        return info
+    try:
+        data = base64.b64decode(payload["function" if encoding == "python-function" else "data"])
+        strings = [arg for _, arg, _ in pickletools.genops(data) if isinstance(arg, str)]
+    except (KeyError, TypeError, ValueError, binascii.Error):
+        return info
+    if "_make_function" in strings:
+        after = {key: strings[index + 1] for index, key in enumerate(strings[:-1])
+                 if key in ("__qualname__", "__name__")}
+        info["function"] = after.get("__qualname__")
+        info["module"] = after.get("__name__")
+        info["file"] = next((value for value in strings if value.endswith(".py")), None)
+    elif len(strings) >= 2:
+        info["module"], info["function"] = strings[0], strings[1]
+    return info
+
+
+def load_functions():
+    global function_cache
+    if function_cache is None:
+        try:
+            function_cache = json.loads(FUNCTIONS.read_text())
+        except (FileNotFoundError, ValueError):
+            function_cache = {}
+    return function_cache
+
+
+def save_functions(cache, keep):
+    """Persist descriptions, dropping those of tasks the core no longer has."""
+    trimmed = {key: value for key, value in cache.items() if key in keep}
+    DATA.mkdir(parents=True, exist_ok=True)
+    temporary = FUNCTIONS.with_suffix(".tmp")
+    temporary.write_text(json.dumps(trimmed))
+    temporary.replace(FUNCTIONS)
+    return trimmed
+
+
+def function_of(task_id, cache):
+    if task_id not in cache:
+        try:
+            cache[task_id] = describe_payload(core("GET", f"/v1/tasks/{task_id}/payload"))
+        except ApiError:
+            cache[task_id] = describe_payload(None)
+    return cache[task_id]
+
+
+def environments_by_pool():
+    with lock:
+        return {environment["pool"]: environment for environment in load_state().values()}
+
+
+def execution_view(task, environments, function):
+    environment = environments.get(task["pool"])
+    end = task.get("finished_at_ms")
+    start = task.get("started_at_ms")
+    return {
+        "id": task["id"],
+        "environment": environment["name"] if environment else task["pool"],
+        "environment_id": environment["id"] if environment else None,
+        "status": task["status"],
+        "function": function.get("function"),
+        "module": function.get("module"),
+        "file": function.get("file"),
+        "encoding": function.get("encoding"),
+        "node": task.get("node"),
+        "error": task.get("error"),
+        "created_at_ms": task["created_at_ms"],
+        "started_at_ms": start,
+        "finished_at_ms": end,
+        "duration_ms": end - start if end and start else None,
+        "metrics": task.get("metrics"),
+    }
+
+
+def owned_task(task_id):
+    try:
+        task = core("GET", f"/v1/tasks/{quote(task_id, safe='')}")
+    except ApiError as error:
+        if error.status in (400, 404):
+            raise ApiError(404, "execution not found") from None
+        raise
+    if task.get("owner") != OWNER:
+        raise ApiError(404, "execution not found")
+    return task
+
+
+def list_executions(query):
+    global function_cache
+    limit =min(int((query.get("limit") or ["200"])[0]), 1000)
+    params = {"owner": OWNER, "limit": limit}
+    environment = (query.get("environment") or [None])[0]
+    if environment:
+        with lock:
+            params["pool"] = find(load_state(), environment)["pool"]
+    tasks = core("GET", "/v1/tasks?" + urlencode(params))
+    environments = environments_by_pool()
+    with function_lock:
+        cache = load_functions()
+        before = len(cache)
+        views = [execution_view(task, environments, function_of(task["id"], cache))
+                 for task in tasks]
+        if len(cache) != before and not environment:
+            function_cache = save_functions(cache, {task["id"] for task in tasks})
+    return views
+
+
+def submit_execution(body):
+    """Run Python code in an environment: the plugin's entry point for SDKs."""
+    if "payload" not in body:
+        raise ApiError(400, "payload is required")
+    with lock:
+        environment = find(load_state(), str(body.get("environment") or ""))
+    task = core("POST", "/v1/tasks", {
+        "pool": environment["pool"],
+        "payload": body["payload"],
+        "queue": bool(body.get("queue", True)),
+        "variables": body.get("variables") or {},
+        "secrets": body.get("secrets") or {},
+    })
+    function = describe_payload(body["payload"])
+    with function_lock:
+        load_functions()[task["id"]] = function
+    return execution_view(task, {environment["pool"]: environment}, function)
+
+
+def execution_details(task_id):
+    task = owned_task(task_id)
+    with function_lock:
+        function = function_of(task["id"], load_functions())
+    view = execution_view(task, environments_by_pool(), function)
+    view["logs"] = core("GET", f"/v1/tasks/{task['id']}/logs")
+    view["result"] = None
+    if task["status"] in FINISHED:
+        view["result"] = core("GET", f"/v1/tasks/{task['id']}/result").get("value")
+    return view
+
+
+def execution_route(method, parts, body, query):
+    if parts == ["executions"]:
+        if method == "GET":
+            return 200, list_executions(query)
+        if method == "POST":
+            return 202, submit_execution(body)
+    if len(parts) >= 2 and parts[0] == "executions" and method == "GET":
+        task = owned_task(parts[1])
+        if len(parts) == 2:
+            return 200, execution_details(task["id"])
+        if len(parts) == 3 and parts[2] in ("wait", "result", "logs", "payload"):
+            return 200, core("GET", f"/v1/tasks/{task['id']}/{parts[2]}", timeout=60)
+    return None
+
+
 # --- HTTP -------------------------------------------------------------------------
 
-def route(method, path, body):
+def route(method, path, body, query=None):
     parts = [unquote(part) for part in path.strip("/").split("/") if part]
     if parts[:1] == ["gui"] and parts[1:2] == ["api"]:
         parts = parts[1:]
@@ -397,6 +580,9 @@ def route(method, path, body):
     if parts[:1] != ["api"]:
         raise ApiError(404, "not found")
     parts = parts[1:]
+    handled = execution_route(method, parts, body, query or {})
+    if handled is not None:
+        return handled
     if parts == ["images"] and method == "GET":
         return 200, core("GET", "/v1/images")
     if parts == ["environments"]:
@@ -444,14 +630,15 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
 
     def handle_method(self):
-        path = urlsplit(self.path).path
+        url = urlsplit(self.path)
+        path = url.path
         try:
             if self.command == "GET" and path.rstrip("/") in ("/gui", "/gui/index.html"):
                 return self.send(200, (HERE / "gui" / "index.html").read_bytes(),
                                  "text/html; charset=utf-8")
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}") if length else {}
-            status, payload = route(self.command, path, body)
+            status, payload = route(self.command, path, body, parse_qs(url.query))
             self.send(status, payload)
         except ApiError as error:
             self.send(error.status, {"error": str(error)})
