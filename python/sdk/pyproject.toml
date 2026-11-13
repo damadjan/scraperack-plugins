@@ -3,12 +3,12 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "scraperack"
-version = "0.2.0a1"
-description = "Python SDK for self-hosted ScrapeRack clusters"
+name = "scraperack-python"
+version = "0.1.0a1"
+description = "Run Python functions on a self-hosted ScrapeRack cluster through its Python plugin"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["cloudpickle>=3", "httpx>=0.27"]
+dependencies = ["scraperack>=0.3.0a1", "cloudpickle>=3"]
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 classifiers = ["Development Status :: 3 - Alpha"]
@@ -17,5 +17,8 @@ classifiers = ["Development Status :: 3 - Alpha"]
 Repository = "https://github.com/damadjan/scraperack-plugins"
 Issues = "https://github.com/damadjan/scraperack-plugins/issues"
 
+[tool.setuptools]
+packages = ["scraperack_python"]
+
 [tool.setuptools.package-data]
-scraperack = ["py.typed"]
+scraperack_python = ["py.typed"]

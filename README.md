@@ -2,11 +2,13 @@
 
 Public plugins for [ScrapeRack](https://github.com/damadjan/scraperack). A plugin adds a
 workload type to a ScrapeRack cluster without changing the core. The core only runs
-microVMs; a plugin owns what runs in them and how users see it.
+microVMs; a plugin owns what runs in them and how users see it. A plugin's SDK lives next
+to it (for example [`python/sdk`](python/sdk)) and builds on the core client,
+[`scraperack`](https://github.com/damadjan/scraperack/tree/main/sdk).
 
 | Plugin | What it adds |
 |---|---|
-| [`python`](python/) | Python environments and executions: package sets built once into cached disks, functions run with the `scraperack` SDK and listed with their output |
+| [`python`](python/) | Python environments and executions: package sets built once into cached disks, functions run with the `scraperack-python` SDK and listed with their output |
 
 ## Install a plugin
 

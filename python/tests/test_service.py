@@ -145,7 +145,8 @@ class ServiceTests(unittest.TestCase):
     def test_describes_functions_pickled_by_value(self):
         # Opcode strings as cloudpickle writes a function defined in __main__.
         strings = ["cloudpickle.cloudpickle", "_make_function", "_builtin_type", "CodeType",
-                   "url", "/app/jobs.py", "scrape", "scrape", "__package__", "__name__",
+                   "helper.py", "url", "/app/jobs.py", "scrape", "Spider.scrape",
+                   "__package__", "__name__",
                    "__main__", "__file__", "_function_setstate", "scrape", "__qualname__",
                    "Spider.scrape", "__module__"]
         data = pickle.dumps(strings)
