@@ -1,7 +1,7 @@
-"""ScrapeRack Python plugin.
+"""Scraperack Python plugin.
 
 Environments: builds immutable virtualenv disks for Python package sets and
-keeps one ScrapeRack pool per environment.
+keeps one Scraperack pool per environment.
 
 Executions: Python code run in those environments. Each execution is a core
 task on the environment's pool; this plugin owns how they are submitted,

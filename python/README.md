@@ -1,6 +1,6 @@
 # Python plugin
 
-Runs Python functions in ScrapeRack microVMs: environments with pinned pip packages and
+Runs Python functions in Scraperack microVMs: environments with pinned pip packages and
 warm microVMs, and an Executions view of every call with its output.
 
 ```text

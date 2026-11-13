@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "scraperack-python"
 version = "0.1.0a1"
-description = "Run Python functions on a self-hosted ScrapeRack cluster through its Python plugin"
+description = "Run Python functions on a self-hosted Scraperack cluster through its Python plugin"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["scraperack>=0.3.0a1", "cloudpickle>=3"]

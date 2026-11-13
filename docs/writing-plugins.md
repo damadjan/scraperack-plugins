@@ -1,6 +1,6 @@
 # Writing a plugin
 
-A plugin adds a workload type to ScrapeRack without changing the core. It is a folder with
+A plugin adds a workload type to Scraperack without changing the core. It is a folder with
 a manifest, a program that serves HTTP on a Unix socket, and optionally files for the
 microVMs. Any language works. Plugins are trusted: they run with the controller's
 permissions and can use the whole core API.
@@ -16,7 +16,7 @@ version = "0.1.0"                # 1-32 letters, digits, . - _ +
 description = "Headless browser fleet"
 install = ["pip", "install", "--target", "vendor", "-r", "requirements.txt"]  # optional
 run = ["python3", "service.py"]  # started in the plugin folder, restarted if it exits
-gui = true                       # serve /gui/ to get a page in the ScrapeRack sidebar
+gui = true                       # serve /gui/ to get a page in the Scraperack sidebar
 guest = "guest"                  # optional folder, becomes a read-only disk for microVMs
 ```
 

@@ -1,11 +1,11 @@
 # scraperack-python
 
-Run Python functions on a self-hosted ScrapeRack cluster. This is the SDK of the
+Run Python functions on a self-hosted Scraperack cluster. This is the SDK of the
 [Python plugin](..): it manages environments (package sets with warm microVMs) and runs
 functions in them as executions. It builds on [`scraperack`](https://github.com/damadjan/scraperack/tree/main/sdk),
 the core client, which stays available as `py.cluster`.
 
-> ScrapeRack is alpha software. Use it on trusted infrastructure and expect breaking changes.
+> Scraperack is alpha software. Use it on trusted infrastructure and expect breaking changes.
 
 ```sh
 pip install scraperack-python

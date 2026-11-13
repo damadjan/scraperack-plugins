@@ -9,7 +9,7 @@
    tar -czf python-plugin.tar.gz -C python/plugin .
    ```
 
-2. In the ScrapeRack GUI open **Plugins → Install plugin**, drop the archive in, review what
+2. In the Scraperack GUI open **Plugins → Install plugin**, drop the archive in, review what
    it adds, and click **Install**.
 
 Or with the API:
@@ -32,7 +32,7 @@ at install time from their original sources.
 Installing an archive with a different `version` updates the plugin. The previous version
 is kept:
 
-- if the new version does not start, ScrapeRack switches back to the previous one
+- if the new version does not start, Scraperack switches back to the previous one
   automatically;
 - **Roll back** on the plugin's card (or `POST /v1/plugins/{name}/rollback`) switches back
   by hand.

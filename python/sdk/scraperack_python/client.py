@@ -1,4 +1,4 @@
-"""Clients for the ScrapeRack Python plugin: environments and executions.
+"""Clients for the Scraperack Python plugin: environments and executions.
 
 They talk to the plugin's API at ``/plugins/python/api`` through the core
 ``scraperack`` client, which stays available as ``.cluster`` for everything

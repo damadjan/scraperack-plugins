@@ -14,15 +14,15 @@ def _reset_context(token):
 def secret(name):
     context = _context.get()
     if context is None:
-        raise RuntimeError("no active ScrapeRack invocation")
+        raise RuntimeError("no active Scraperack invocation")
     try:
         return context["secrets"][name]
     except KeyError:
-        raise KeyError(f"unknown ScrapeRack secret: {name}") from None
+        raise KeyError(f"unknown Scraperack secret: {name}") from None
 
 
 def variable(name, default=None):
     context = _context.get()
     if context is None:
-        raise RuntimeError("no active ScrapeRack invocation")
+        raise RuntimeError("no active Scraperack invocation")
     return context["variables"].get(name, default)

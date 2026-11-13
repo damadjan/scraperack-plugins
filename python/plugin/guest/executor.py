@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""ScrapeRack Python executor.
+"""Scraperack Python executor.
 
 Runs inside each microVM, started by the guest agent with the environment's
 virtualenv interpreter. Speaks length-prefixed JSON on the executor socket.
