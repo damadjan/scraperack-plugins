@@ -18,6 +18,31 @@ for its files.
    disk size for new workspaces.
 4. On **Workspaces**, create a workspace and click **Open** once it is running.
 
+## Portal
+
+People use their workspaces from the portal, not the Scraperack admin page:
+
+```
+http://<controller>:7070/plugins/workspaces/gui/portal/
+```
+
+(**Open portal** on the plugin's page links to it.)
+
+- **Your workspaces:** a card per workspace with its status, desktop and node; one click
+  launches, resumes or opens it. Suspend, shut down and delete are in its menu.
+- **New workspace:** pick a desktop from the catalog, name it, choose disk size and
+  timezone; it opens as soon as it is ready.
+- **Session:** while the workspace starts (queued, moving to another node, starting) the
+  portal shows where it is; then the browser opens the desktop page, served from inside the
+  workspace's microVM. The desktop fills the window and follows its size. The handle on
+  the left edge opens the controls: back to the portal, fullscreen, clipboard both ways,
+  Ctrl+Alt+Del, Esc and Super, picture quality, view only, suspend and shut down.
+
+The desktop page (`guest/viewer.html`) is noVNC's client without its toolbar; websockify
+serves it from the microVM, on the same origin as the VNC connection. The portal hands it
+the password, its own address and the workspace in the URL fragment; Back, Suspend and Shut
+down return to the portal, which does the work. Plain HTML, CSS and JavaScript, no framework.
+
 ## How it works
 
 - **Desktop:** one pool per desktop. Before the pool's snapshot is taken, the executor

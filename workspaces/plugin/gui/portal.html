@@ -1,0 +1,515 @@
+<!doctype html>
+<!-- Workspaces portal: where people use their desktops (the Scraperack page is for admins).
+     Plain HTML, CSS and JavaScript; talks to the plugin API next to it. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspaces</title>
+<style>
+  :root {
+    --bg: #09090d; --bg-2: #101017; --card: #14141c; --card-2: #1b1b25; --line: #262633;
+    --line-2: #343445; --text: #ececf2; --muted: #9a9aab; --faint: #6b6b7d;
+    --accent: #d946ef; --accent-2: #a855f7; --accent-soft: rgba(217, 70, 239, .14);
+    --ok: #34d399; --warn: #fbbf24; --info: #60a5fa; --bad: #f87171;
+    --radius: 14px; --shadow: 0 10px 30px rgba(0, 0, 0, .45);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+         -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:disabled { cursor: default; opacity: .55; }
+  a { color: inherit; }
+  [hidden] { display: none !important; }
+
+  /* --- Top bar --------------------------------------------------------------------- */
+  .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px;
+         height: 60px; padding: 0 28px; background: rgba(9, 9, 13, .82);
+         backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; letter-spacing: .2px;
+           font-size: 15px; text-decoration: none; }
+  .brand-mark { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+                background: linear-gradient(135deg, var(--accent), var(--accent-2));
+                box-shadow: 0 4px 16px rgba(217, 70, 239, .35); }
+  .spacer { flex: 1; }
+  .clock { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+
+  /* --- Buttons ------------------------------------------------------------------------ */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+         height: 36px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line-2);
+         background: var(--card-2); font-weight: 600; white-space: nowrap;
+         transition: background .15s, border-color .15s, transform .05s; }
+  .btn:hover:not(:disabled) { background: #232330; border-color: #46465a; }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 0;
+                 color: #fff; box-shadow: 0 6px 18px rgba(217, 70, 239, .28); }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.08); background:
+                 linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  .btn.ghost:hover:not(:disabled) { color: var(--text); background: var(--card-2); }
+  .btn.danger { color: #fecaca; border-color: #5b2330; background: #241319; }
+  .btn.danger:hover:not(:disabled) { background: #33161f; border-color: #7f2a3c; }
+  .btn.small { height: 30px; padding: 0 12px; font-size: 13px; border-radius: 8px; }
+  .btn.icon { width: 36px; padding: 0; }
+  .btn svg { width: 16px; height: 16px; flex: none; }
+
+  /* --- Dashboard ---------------------------------------------------------------------- */
+  .page { max-width: 1240px; margin: 0 auto; padding: 34px 28px 60px; }
+  .hero { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 26px; flex-wrap: wrap; }
+  .hero h1 { margin: 0; font-size: 28px; letter-spacing: -.3px; }
+  .hero p { margin: 6px 0 0; color: var(--muted); }
+  .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .card { position: relative; display: flex; flex-direction: column; border-radius: var(--radius);
+          background: var(--card); border: 1px solid var(--line); overflow: hidden;
+          transition: border-color .15s, transform .15s, box-shadow .15s; }
+  .card:hover { border-color: var(--line-2); transform: translateY(-2px); box-shadow: var(--shadow); }
+  .thumb { position: relative; height: 136px; display: grid; place-items: center; cursor: pointer;
+           background: var(--thumb); overflow: hidden; }
+  .thumb::after { content: ""; position: absolute; inset: 0;
+                  background: radial-gradient(120% 90% at 85% 0%, rgba(255,255,255,.18), transparent 55%); }
+  .thumb .monitor { width: 64px; height: 64px; color: rgba(255, 255, 255, .92);
+                    filter: drop-shadow(0 6px 14px rgba(0,0,0,.35)); }
+  .thumb .badge { position: absolute; top: 12px; left: 12px; z-index: 1; }
+  .card-body { padding: 14px 16px 6px; }
+  .card-title { font-weight: 650; font-size: 15px; overflow: hidden; text-overflow: ellipsis;
+                white-space: nowrap; }
+  .card-meta { color: var(--muted); font-size: 12.5px; margin-top: 3px; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
+  .card-foot { display: flex; align-items: center; gap: 8px; padding: 12px 16px 16px; margin-top: auto; }
+  .card-foot .btn.primary { flex: 1; }
+  .new-card { border-style: dashed; border-color: var(--line-2); background: transparent;
+              min-height: 252px; display: grid; place-items: center; text-align: center; cursor: pointer;
+              color: var(--muted); }
+  .new-card:hover { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+  .new-card .plus { width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center;
+                    margin: 0 auto 10px; background: var(--card-2); border: 1px solid var(--line-2); }
+  .empty { grid-column: 1 / -1; text-align: center; padding: 70px 20px; color: var(--muted);
+           border: 1px dashed var(--line-2); border-radius: var(--radius); }
+  .empty h2 { color: var(--text); margin: 14px 0 6px; font-size: 18px; }
+
+  .badge { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px;
+           border-radius: 999px; font-size: 12px; font-weight: 600; background: rgba(9, 9, 13, .72);
+           border: 1px solid rgba(255, 255, 255, .12); backdrop-filter: blur(6px); color: #ddd; }
+  .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .badge.running .dot { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .badge.suspended .dot { background: var(--info); }
+  .badge.busy .dot { background: var(--warn); animation: pulse 1.2s infinite; }
+  .badge.failed .dot { background: var(--bad); }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  .menu-wrap { position: relative; }
+  .menu { position: absolute; right: 0; bottom: 40px; min-width: 170px; padding: 6px; z-index: 4;
+          background: var(--card-2); border: 1px solid var(--line-2); border-radius: 12px;
+          box-shadow: var(--shadow); }
+  .menu button { display: flex; width: 100%; align-items: center; gap: 10px; padding: 8px 10px;
+                 border: 0; background: none; border-radius: 8px; text-align: left; }
+  .menu button:hover:not(:disabled) { background: #2a2a38; }
+  .menu button.danger { color: #fca5a5; }
+  .menu svg { width: 15px; height: 15px; color: var(--muted); }
+
+  /* --- Dialog ------------------------------------------------------------------------- */
+  dialog { width: min(720px, 94vw); padding: 0; color: var(--text); background: var(--bg-2);
+           border: 1px solid var(--line-2); border-radius: 18px; box-shadow: var(--shadow); }
+  dialog::backdrop { background: rgba(3, 3, 6, .66); backdrop-filter: blur(3px); }
+  .dlg-head { padding: 22px 24px 4px; }
+  .dlg-head h2 { margin: 0; font-size: 19px; }
+  .dlg-head p { margin: 4px 0 0; color: var(--muted); }
+  .dlg-body { padding: 14px 24px 6px; }
+  .dlg-foot { display: flex; gap: 10px; align-items: center; padding: 16px 24px 22px; }
+  .catalog { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+             margin-bottom: 18px; }
+  .tile { position: relative; display: flex; gap: 12px; align-items: center; padding: 12px;
+          border-radius: 12px; border: 1px solid var(--line-2); background: var(--card); cursor: pointer; }
+  .tile:hover { border-color: #4b4b60; }
+  .tile input { position: absolute; opacity: 0; }
+  .tile:has(input:checked) { border-color: var(--accent); background: var(--accent-soft);
+                             box-shadow: 0 0 0 1px var(--accent) inset; }
+  .tile .logo { width: 42px; height: 42px; flex: none; border-radius: 10px; display: grid;
+                place-items: center; background: var(--thumb); }
+  .tile .logo svg { width: 24px; height: 24px; color: #fff; }
+  .tile b { display: block; font-size: 14px; }
+  .tile span { color: var(--muted); font-size: 12px; }
+  .fields { display: grid; gap: 14px; grid-template-columns: 2fr 1fr 1.4fr; }
+  label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted);
+                font-weight: 600; }
+  input.input { height: 38px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line-2);
+                background: var(--card); color: var(--text); font: inherit; min-width: 0; }
+  input.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .note { min-height: 20px; color: var(--muted); font-size: 13px; }
+  .note.error { color: var(--bad); }
+  @media (max-width: 640px) { .fields { grid-template-columns: 1fr; } .top, .page { padding-left: 16px; padding-right: 16px; } }
+
+  /* --- Session -------------------------------------------------------------------------- */
+  #session { position: fixed; inset: 0; z-index: 10; background: #0b0b10; }
+  #session { position: fixed; inset: 0; z-index: 10; background: #0b0b10; }
+  .stage { position: absolute; inset: 0; display: grid; place-items: center;
+           background: radial-gradient(80% 60% at 50% 40%, #1b1328 0%, #0b0b10 70%); }
+  .stage-box { text-align: center; max-width: 440px; padding: 24px; }
+  .stage-box h2 { margin: 22px 0 6px; font-size: 21px; }
+  .stage-box p { margin: 0; color: var(--muted); }
+  .stage-box .actions { display: flex; gap: 10px; justify-content: center; margin-top: 22px; }
+  .stage-box .error { color: #fca5a5; margin-top: 10px; font-size: 13px; }
+  .spinner { width: 54px; height: 54px; margin: 0 auto; border-radius: 50%;
+             border: 3px solid rgba(255, 255, 255, .1); border-top-color: var(--accent);
+             animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .steps { display: flex; gap: 8px; justify-content: center; margin-top: 20px; }
+  .steps i { width: 34px; height: 4px; border-radius: 4px; background: #2a2a38; }
+  .steps i.on { background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+  .elapsed { margin-top: 12px; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .big-icon { width: 64px; height: 64px; margin: 0 auto; border-radius: 18px; display: grid;
+              place-items: center; background: var(--card-2); border: 1px solid var(--line-2); }
+  .big-icon svg { width: 30px; height: 30px; color: var(--muted); }
+
+  .toast { position: fixed; left: 50%; bottom: 26px; z-index: 30; transform: translateX(-50%);
+           padding: 10px 16px; border-radius: 10px; background: var(--card-2); border: 1px solid var(--line-2);
+           box-shadow: var(--shadow); font-size: 13px; }
+  .toast.error { border-color: #7f2a3c; color: #fecaca; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="13" rx="2"/><path d="M8 20.5h8M12 16.5v4"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l10.5-6.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6v12M15 6v12"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6.5" y="6.5" width="11" height="11" rx="2"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12.5a1.5 1.5 0 0 0 1.5 1.5h7a1.5 1.5 0 0 0 1.5-1.5L18 7M9 7V4.5h6V7"/></symbol>
+  <symbol id="i-dots" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3v8M6.4 6.6a8 8 0 1 0 11.2 0"/></symbol>
+</svg>
+
+<div id="dashboard">
+  <header class="top">
+    <a class="brand" href="#"><span class="brand-mark"><svg width="17" height="17"><use href="#i-monitor"/></svg></span>Workspaces</a>
+    <span class="spacer"></span>
+    <span class="clock" id="clock"></span>
+  </header>
+  <main class="page">
+    <div class="hero">
+      <div><h1>Your workspaces</h1><p>Desktops that keep your files, apps and open windows. Launch one to use it right here in the browser.</p></div>
+      <span class="spacer"></span>
+      <button class="btn primary" id="new-button"><svg><use href="#i-plus"/></svg>New workspace</button>
+    </div>
+    <div class="grid" id="cards"></div>
+  </main>
+</div>
+
+<div id="session" hidden>
+  <div class="stage" id="stage"></div>
+</div>
+
+<dialog id="create">
+  <form method="dialog" id="create-form">
+    <div class="dlg-head"><h2>New workspace</h2><p>Pick a desktop. Your files and installed apps stay with the workspace.</p></div>
+    <div class="dlg-body">
+      <div class="catalog" id="catalog"></div>
+      <div class="fields">
+        <label class="field">Name<input class="input" name="name" required maxlength="64" placeholder="my-desktop" autocomplete="off"></label>
+        <label class="field">Disk (GiB)<input class="input" name="disk_gib" type="number" min="1" max="4096" value="10"></label>
+        <label class="field">Timezone<input class="input" name="timezone" value="UTC"></label>
+      </div>
+      <div class="note" id="create-note"></div>
+    </div>
+    <div class="dlg-foot">
+      <span class="spacer"></span>
+      <button class="btn ghost" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" id="create-submit" value="default"><svg><use href="#i-play"/></svg>Create and launch</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? "").replace(/[&<>"']/g, c =>
+  ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const BUSY = new Set(["queued", "moving", "starting", "suspending", "stopping"]);
+const LIVE = new Set(["queued", "moving", "starting", "running"]);
+const LABEL = {running: "Running", suspended: "Suspended", stopped: "Off", queued: "Queued",
+  moving: "Moving", starting: "Starting", suspending: "Saving", stopping: "Shutting down"};
+let workspaces = [], desktops = [], current = null, sessionTimer = null, dashTimer = null,
+    stageKey = "", stageSince = 0, toastTimer = null;
+
+async function api(method, path, body) {
+  const response = await fetch(`../api/${path}`, {method,
+    headers: body === undefined ? {} : {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) throw new Error(data?.error || response.statusText);
+  return data;
+}
+function toast(text, error = false) {
+  const box = $("toast");
+  box.textContent = text;
+  box.className = `toast${error ? " error" : ""}`;
+  box.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { box.hidden = true; }, 4200);
+}
+function hue(text) {
+  let h = 0;
+  for (const c of String(text)) h = (h * 31 + c.charCodeAt(0)) % 360;
+  return h;
+}
+function thumb(text) {
+  const h = hue(text);
+  return `linear-gradient(135deg, hsl(${h} 70% 42%), hsl(${(h + 48) % 360} 75% 30%))`;
+}
+function badge(status) {
+  const kind = status === "running" ? "running" : status === "suspended" ? "suspended"
+    : BUSY.has(status) ? "busy" : "";
+  return `<span class="badge ${kind}"><span class="dot"></span>${esc(LABEL[status] || status)}</span>`;
+}
+function ago(ms) {
+  if (!ms) return "";
+  const minutes = Math.round((Date.now() - ms) / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  return hours < 24 ? `${hours} h ago` : `${Math.round(hours / 24)} d ago`;
+}
+
+// --- Dashboard ------------------------------------------------------------------------
+function primary(w) {
+  if (w.status === "stopped") return ["launch", "Launch", "i-play", false];
+  if (w.status === "suspended") return ["launch", "Resume", "i-play", false];
+  if (w.status === "suspending") return ["", "Saving…", "i-moon", true];
+  if (w.status === "stopping") return ["", "Shutting down…", "i-power", true];
+  return ["open", "Open", "i-monitor", false];
+}
+function renderCards() {
+  const cards = workspaces.map(w => {
+    const [action, label, icon, disabled] = primary(w);
+    const meta = [w.desktop_name, w.node_name || w.volume_node_name,
+      w.status === "running" ? `started ${ago(w.started_at_ms)}` : w.stopped_at_ms ? `used ${ago(w.stopped_at_ms)}` : ""]
+      .filter(Boolean).join(" · ");
+    return `<article class="card" data-id="${esc(w.id)}">
+      <div class="thumb" style="--thumb:${thumb(w.name)}" data-action="${action || "open"}">
+        ${badge(w.status)}
+        <svg class="monitor"><use href="#i-monitor"/></svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title" title="${esc(w.name)}">${esc(w.name)}</div>
+        <div class="card-meta">${esc(meta)}</div>
+        ${w.status === "stopped" && w.error ? `<div class="card-meta" style="color:#fca5a5">${esc(w.error)}</div>` : ""}
+      </div>
+      <div class="card-foot">
+        <button class="btn primary small" data-action="${action}" ${disabled ? "disabled" : ""}><svg><use href="#${icon}"/></svg>${label}</button>
+        <div class="menu-wrap"><button class="btn small icon" data-action="menu" title="More"><svg><use href="#i-dots"/></svg></button></div>
+      </div>
+    </article>`;
+  });
+  cards.push(`<article class="card new-card" data-action="new"><div>
+      <div class="plus"><svg width="20" height="20"><use href="#i-plus"/></svg></div>
+      <b>New workspace</b><div style="font-size:12.5px;margin-top:4px">Pick a desktop to start from</div></div></article>`);
+  if (!workspaces.length) {
+    cards.unshift(`<div class="empty"><div class="big-icon"><svg><use href="#i-monitor"/></svg></div>
+      <h2>No workspaces yet</h2><div>Create one and it opens right here, ready to use in a few seconds.</div></div>`);
+  }
+  $("cards").innerHTML = cards.join("");
+}
+async function refreshDashboard() {
+  try {
+    workspaces = await api("GET", "workspaces");
+    if (!document.querySelector(".menu")) renderCards();
+  } catch (error) { toast(error.message, true); }
+}
+function closeMenus() { document.querySelectorAll(".menu").forEach(menu => menu.remove()); }
+function openMenu(button, w) {
+  closeMenus();
+  const items = [];
+  if (["running", "starting"].includes(w.status)) items.push(["suspend", "Suspend", "i-moon"]);
+  if (LIVE.has(w.status)) items.push(["stop", "Shut down", "i-power"]);
+  if (["stopped", "suspended"].includes(w.status)) items.push(["delete", "Delete", "i-trash", "danger"]);
+  if (!items.length) items.push(["", "Busy…", "i-dots"]);
+  const menu = document.createElement("div");
+  menu.className = "menu";
+  menu.innerHTML = items.map(([action, label, icon, cls]) =>
+    `<button class="${cls || ""}" data-menu="${action}" ${action ? "" : "disabled"}><svg><use href="#${icon}"/></svg>${label}</button>`).join("");
+  button.parentElement.appendChild(menu);
+}
+$("cards").addEventListener("click", async event => {
+  const target = event.target.closest("[data-action],[data-menu]");
+  if (!target) { closeMenus(); return; }
+  if (target.dataset.action === "new") return openCreate();
+  const card = target.closest(".card");
+  const w = workspaces.find(item => item.id === card?.dataset.id);
+  if (!w) return;
+  const action = target.dataset.menu ?? target.dataset.action;
+  if (action === "menu") { event.stopPropagation(); return openMenu(target, w); }
+  closeMenus();
+  try {
+    if (action === "launch") { await api("POST", `workspaces/${w.id}/start`); location.hash = `#/w/${w.id}`; }
+    else if (action === "open") location.hash = `#/w/${w.id}`;
+    else if (action === "suspend") { await api("POST", `workspaces/${w.id}/suspend`); toast(`Saving ${w.name}…`); }
+    else if (action === "stop") { await api("POST", `workspaces/${w.id}/stop`); toast(`Shutting down ${w.name}…`); }
+    else if (action === "delete") {
+      if (!confirm(`Delete ${w.name}? Its files and installed apps are removed for good.`)) return;
+      await api("DELETE", `workspaces/${w.id}`); toast(`Deleted ${w.name}`);
+    }
+  } catch (error) { toast(error.message, true); }
+  refreshDashboard();
+});
+document.addEventListener("click", event => { if (!event.target.closest(".menu-wrap")) closeMenus(); });
+
+// --- New workspace -------------------------------------------------------------------
+async function openCreate() {
+  try { desktops = (await api("GET", "desktops")).filter(d => d.ready); }
+  catch (error) { return toast(error.message, true); }
+  const form = $("create-form");
+  $("catalog").innerHTML = desktops.length ? desktops.map((d, index) => `
+    <label class="tile"><input type="radio" name="desktop" value="${esc(d.id)}" ${index ? "" : "checked"}>
+      <span class="logo" style="--thumb:${thumb(d.name)}"><svg><use href="#i-monitor"/></svg></span>
+      <span><b>${esc(d.name)}</b><span>${d.cpu_millis / 1000} vCPU · ${(d.memory_mib / 1024).toFixed(d.memory_mib % 1024 ? 1 : 0)} GiB RAM</span></span>
+    </label>`).join("")
+    : `<div class="note error">No desktops are ready yet. An admin adds them on the Scraperack plugin page.</div>`;
+  form.disk_gib.value = desktops[0]?.disk_gib || 10;
+  form.timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  form.name.value = "";
+  $("create-note").textContent = "";
+  $("create-note").className = "note";
+  $("create-submit").disabled = !desktops.length;
+  $("create").showModal();
+  form.name.focus();
+}
+$("new-button").onclick = openCreate;
+$("catalog").addEventListener("change", event => {
+  const desktop = desktops.find(d => d.id === event.target.value);
+  if (desktop) $("create-form").disk_gib.value = desktop.disk_gib;
+});
+$("create-form").addEventListener("submit", async event => {
+  if (event.submitter?.value === "cancel") return;
+  event.preventDefault();
+  const form = event.target;
+  const body = {name: form.name.value.trim(), desktop: form.desktop?.value,
+    disk_gib: Number(form.disk_gib.value), timezone: form.timezone.value.trim() || "UTC"};
+  $("create-submit").disabled = true;
+  $("create-note").textContent = "Creating…";
+  try {
+    const w = await api("POST", "workspaces", body);
+    $("create").close();
+    location.hash = `#/w/${w.id}`;
+  } catch (error) {
+    $("create-note").textContent = error.message;
+    $("create-note").className = "note error";
+  } finally { $("create-submit").disabled = false; }
+});
+
+// --- Session: progress here, then the desktop page in the workspace's microVM ------------
+const STAGES = {
+  queued: ["Waiting for room", "Your workspace starts as soon as a node has room for it.", 1],
+  moving: ["Moving your workspace", "Its node is full, so your files are being copied to one with room.", 2],
+  starting: ["Starting your desktop", "Almost there.", 3],
+  running: ["Opening your desktop", "Connecting…", 4],
+  suspending: ["Saving your desktop", "Your open windows are being saved for next time.", 0],
+  stopping: ["Shutting down", "Your files are kept.", 0],
+};
+function showStage(w) {
+  const key = `${w.status}:${w.error || ""}`;
+  if (key !== stageKey) { stageKey = key; stageSince = Date.now(); }
+  const stage = $("stage");
+  if (STAGES[w.status]) {
+    const [title, text, step] = STAGES[w.status];
+    const steps = step ? `<div class="steps">${[1, 2, 3, 4].map(i => `<i class="${i <= step ? "on" : ""}"></i>`).join("")}</div>` : "";
+    stage.innerHTML = `<div class="stage-box"><div class="spinner"></div><h2>${title}</h2><p>${text}</p>${steps}
+      <div class="elapsed" id="elapsed"></div>
+      <div class="actions"><button class="btn ghost" data-stage="back"><svg><use href="#i-back"/></svg>Workspaces</button></div></div>`;
+  } else {
+    const suspended = w.status === "suspended";
+    stage.innerHTML = `<div class="stage-box">
+      <div class="big-icon"><svg><use href="#${suspended ? "i-moon" : "i-power"}"/></svg></div>
+      <h2>${suspended ? `${esc(w.name)} is suspended` : `${esc(w.name)} is off`}</h2>
+      <p>${suspended ? "Your open windows are saved. Resume to pick up where you left off." : "Your files and apps are kept. Launch it to continue."}</p>
+      ${w.error ? `<div class="error">${esc(w.error)}</div>` : ""}
+      <div class="actions"><button class="btn" data-stage="back"><svg><use href="#i-back"/></svg>Workspaces</button>
+        <button class="btn primary" data-stage="launch"><svg><use href="#i-play"/></svg>${suspended ? "Resume" : "Launch"}</button></div></div>`;
+  }
+  tickElapsed();
+}
+function tickElapsed() {
+  const box = $("elapsed");
+  if (box) box.textContent = `${Math.round((Date.now() - stageSince) / 1000)} s`;
+}
+$("stage").addEventListener("click", async event => {
+  const action = event.target.closest("[data-stage]")?.dataset.stage;
+  if (action === "back") location.hash = "";
+  if (action === "launch" && current) {
+    try { await api("POST", `workspaces/${current.id}/start`); pollSession(); }
+    catch (error) { toast(error.message, true); }
+  }
+});
+function desktopLink(w) {
+  // The desktop page reads these from its fragment and comes back here for Back/Suspend/Stop.
+  const [page, fragment] = w.viewer_url.split("#");
+  const extra = new URLSearchParams({portal: location.href.split("#")[0], workspace: w.id, name: w.name});
+  return `${page}#${fragment}&${extra}`;
+}
+async function pollSession() {
+  const [, , id] = location.hash.split("/");
+  if (!id) return;
+  let w;
+  try { w = await api("GET", `workspaces/${encodeURIComponent(id)}`); }
+  catch (error) { toast(error.message, true); return; }
+  current = w;
+  document.title = `${w.name} · Workspaces`;
+  showStage(w);
+  if (w.status === "running" && w.viewer_url) {
+    clearInterval(sessionTimer);
+    location.href = desktopLink(w);
+  }
+}
+async function sessionAction(id, action) {
+  // Suspend and Shut down from the desktop page land here.
+  try {
+    const w = await api("POST", `workspaces/${encodeURIComponent(id)}/${action}`);
+    toast(action === "suspend" ? `Saving ${w.name}…` : `Shutting down ${w.name}…`);
+  } catch (error) { toast(error.message, true); }
+  location.hash = "";
+}
+function enterSession() {
+  const [, , id, action] = location.hash.split("/");
+  $("dashboard").hidden = true;
+  $("session").hidden = false;
+  stageKey = "";
+  clearInterval(dashTimer);
+  clearInterval(sessionTimer);
+  if (action === "suspend" || action === "stop") return sessionAction(id, action);
+  pollSession();
+  sessionTimer = setInterval(pollSession, 1500);
+}
+function leaveSession() {
+  clearInterval(sessionTimer);
+  current = null;
+  $("session").hidden = true;
+  $("dashboard").hidden = false;
+  document.title = "Workspaces";
+  refreshDashboard();
+  clearInterval(dashTimer);
+  dashTimer = setInterval(refreshDashboard, 3000);
+}
+
+// --- Routing ------------------------------------------------------------------------------
+function route() {
+  if (location.hash.startsWith("#/w/")) enterSession();
+  else leaveSession();
+}
+window.addEventListener("hashchange", route);
+setInterval(() => {
+  $("clock").textContent = new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  tickElapsed();
+}, 1000);
+$("clock").textContent = new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+route();
+</script>
+</body>
+</html>

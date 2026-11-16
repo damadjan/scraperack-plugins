@@ -128,6 +128,8 @@ class WorkspacesTest(unittest.TestCase):
         self.assertEqual(view["status"], "running")
         self.assertIn(f"password={password}", view["url"])
         self.assertIn("http://10.0.0.5:31000/vnc.html", view["url"])
+        self.assertEqual(view["viewer_url"],
+                         f"http://10.0.0.5:31000/workspace.html#password={password}")
         with self.assertRaises(self.service.ApiError):
             self.route("DELETE", f"workspaces/{workspace['id']}")
 
