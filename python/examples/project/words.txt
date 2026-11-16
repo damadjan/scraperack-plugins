@@ -1,0 +1,1 @@
+scraperack runs python functions in firecracker microvms with warm snapshots

@@ -6,11 +6,13 @@ warm microVMs, and an Executions view of every call with its output.
 ```text
 plugin/         the installable plugin (pack this folder)
 sdk/            scraperack-python, the SDK for this plugin
+examples/       SDK usage, one concept per file
 verification/   end-to-end checks and benchmarks
 tests/          plugin unit tests
 ```
 
-Documentation: [the plugin](../docs/python-plugin.md) and [the SDK](../docs/python-sdk.md).
+Documentation: [the plugin](../docs/python-plugin.md), [the SDK](../docs/python-sdk.md) and
+[examples](examples/).
 
 ## Develop
 
