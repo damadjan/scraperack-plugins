@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -99,8 +100,8 @@ class WorkspacesTest(unittest.TestCase):
                                     {"name": "control", "host_port": 31001}]}]
 
     def test_workspace_lifecycle(self):
-        desktop = self.route("POST", "desktops", {"name": "xfce", "image": "img"})
-        pool = self.core.pools[desktop["pool"]]
+        template = self.route("POST", "templates", {"name": "xfce", "image": "img"})
+        pool = self.core.pools[template["pool"]]
         self.assertEqual(pool["volume_mount"], "/mnt/workspace")
         self.assertEqual(pool["preload"], ["golden-desktop"])
         self.assertFalse(pool["reuse"])
@@ -108,6 +109,8 @@ class WorkspacesTest(unittest.TestCase):
         workspace = self.route("POST", "workspaces", {"name": "dev", "disk_gib": 5})
         self.assertEqual(workspace["status"], "queued")
         self.assertEqual(self.core.volumes[workspace["volume"]]["size_mib"], 5120)
+        self.assertEqual((workspace["template"], workspace["template_name"]), (template["id"], "xfce"))
+        self.assertEqual(self.route("GET", "templates/xfce")["workspaces"], 1)
         request = self.core.tasks[workspace["task"]]["request"]
         self.assertEqual(request["volume"], workspace["volume"])
         password = request["secrets"]["VNC_PASSWORD"]
@@ -158,11 +161,32 @@ class WorkspacesTest(unittest.TestCase):
         self.assertEqual((view["status"], view["last_reason"]), ("stopped", "stopped"))
 
         with self.assertRaises(self.service.ApiError):
-            self.route("DELETE", f"desktops/{desktop['id']}")
+            self.route("DELETE", f"templates/{template['id']}")
+
+        large = self.route("POST", "templates", {"name": "xfce-large", "image": "img",
+                                                 "cpu_millis": 4000, "memory_mib": 8192})
+        self.assertEqual(self.core.pools[large["pool"]]["memory_mib"], 8192)
+        view = self.route("PATCH", f"workspaces/{workspace['id']}", {"template": "xfce-large"})
+        self.assertEqual(view["template_name"], "xfce-large")
+        self.route("DELETE", f"templates/{template['id']}")
+
         self.route("DELETE", f"workspaces/{workspace['id']}")
         self.assertNotIn(workspace["volume"], self.core.volumes)
-        self.route("DELETE", f"desktops/{desktop['id']}")
+        self.route("DELETE", f"templates/{large['id']}")
         self.assertFalse(self.core.pools)
+
+    def test_migrates_desktops_to_templates(self):
+        data = Path(self.data.name)
+        (data / "desktops.json").write_text(json.dumps({"d1": {
+            "id": "d1", "name": "xfce", "image": "img", "pool": "workspaces-d1",
+            "cpu_millis": 2000, "memory_mib": 2048, "disk_gib": 10}}))
+        (data / "workspaces.json").write_text(json.dumps({"w1": {
+            "id": "w1", "name": "dev", "desktop": "d1", "volume": "workspace-w1",
+            "status": "stopped", "task": None}}))
+        self.service.migrate()
+        self.assertFalse((data / "desktops.json").exists())
+        self.assertEqual(self.route("GET", "templates")[0]["name"], "xfce")
+        self.assertEqual(self.route("GET", "workspaces/dev")["template_name"], "xfce")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 <!doctype html>
-<!-- Workspaces portal: where people use their desktops (the Scraperack page is for admins).
-     Plain HTML, CSS and JavaScript; talks to the plugin API next to it. -->
+<!-- Workspaces: the plugin's own page. Templates are the configurations (a Scraperack image
+     plus vCPUs, memory and default disk); workspaces are the copies people use. Plain HTML,
+     CSS and JavaScript; talks to the plugin API next to it. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -35,6 +36,11 @@
                 box-shadow: 0 4px 16px rgba(217, 70, 239, .35); }
   .spacer { flex: 1; }
   .clock { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 13px; }
+  .nav { display: flex; gap: 4px; margin-left: 18px; }
+  .nav a { height: 34px; padding: 0 14px; display: inline-flex; align-items: center; border-radius: 9px;
+           color: var(--muted); text-decoration: none; font-weight: 600; }
+  .nav a:hover { color: var(--text); background: var(--card-2); }
+  .nav a.on { color: var(--text); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line-2); }
 
   /* --- Buttons ------------------------------------------------------------------------ */
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -97,6 +103,9 @@
   .badge.suspended .dot { background: var(--info); }
   .badge.busy .dot { background: var(--warn); animation: pulse 1.2s infinite; }
   .badge.failed .dot { background: var(--bad); }
+  .specs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .spec { padding: 2px 8px; border-radius: 6px; background: var(--card-2); border: 1px solid var(--line);
+          color: var(--muted); font-size: 12px; }
   @keyframes pulse { 50% { opacity: .35; } }
 
   .menu-wrap { position: relative; }
@@ -136,10 +145,17 @@
                 font-weight: 600; }
   input.input { height: 38px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--line-2);
                 background: var(--card); color: var(--text); font: inherit; min-width: 0; }
-  input.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  input.input:focus, select.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  select.input { height: 38px; padding: 0 10px; border-radius: 10px; border: 1px solid var(--line-2);
+                 background: var(--card); color: var(--text); font: inherit; min-width: 0; }
+  .fields.two { grid-template-columns: 1fr 1fr; }
+  .fields.three { grid-template-columns: 1fr 1fr 1fr; }
+  .fields .full { grid-column: 1 / -1; }
+  .hint { color: var(--faint); font-size: 12.5px; margin-top: 12px; }
   .note { min-height: 20px; color: var(--muted); font-size: 13px; }
   .note.error { color: var(--bad); }
-  @media (max-width: 640px) { .fields { grid-template-columns: 1fr; } .top, .page { padding-left: 16px; padding-right: 16px; } }
+  @media (max-width: 640px) { .fields, .fields.two, .fields.three { grid-template-columns: 1fr; }
+    .top, .page { padding-left: 16px; padding-right: 16px; } .nav { margin-left: 4px; } .clock { display: none; } }
 
   /* --- Session -------------------------------------------------------------------------- */
   #session { position: fixed; inset: 0; z-index: 10; background: #0b0b10; }
@@ -182,22 +198,33 @@
   <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
   <symbol id="i-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
   <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
   <symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3v8M6.4 6.6a8 8 0 1 0 11.2 0"/></symbol>
 </svg>
 
 <div id="dashboard">
   <header class="top">
     <a class="brand" href="#"><span class="brand-mark"><svg width="17" height="17"><use href="#i-monitor"/></svg></span>Workspaces</a>
+    <nav class="nav"><a href="#" id="nav-workspaces">Workspaces</a><a href="#/templates" id="nav-templates">Templates</a></nav>
     <span class="spacer"></span>
     <span class="clock" id="clock"></span>
   </header>
-  <main class="page">
+  <main class="page" id="view-workspaces">
     <div class="hero">
       <div><h1>Your workspaces</h1><p>Desktops that keep your files, apps and open windows. Launch one to use it right here in the browser.</p></div>
       <span class="spacer"></span>
       <button class="btn primary" id="new-button"><svg><use href="#i-plus"/></svg>New workspace</button>
     </div>
     <div class="grid" id="cards"></div>
+  </main>
+  <main class="page" id="view-templates" hidden>
+    <div class="hero">
+      <div><h1>Templates</h1><p>What a new workspace is made from: a Scraperack image and the size of its machine. Every workspace is a copy of one.</p></div>
+      <span class="spacer"></span>
+      <button class="btn primary" id="new-template-button"><svg><use href="#i-plus"/></svg>New template</button>
+    </div>
+    <div class="grid" id="template-cards"></div>
   </main>
 </div>
 
@@ -207,7 +234,7 @@
 
 <dialog id="create">
   <form method="dialog" id="create-form">
-    <div class="dlg-head"><h2>New workspace</h2><p>Pick a desktop. Your files and installed apps stay with the workspace.</p></div>
+    <div class="dlg-head"><h2>New workspace</h2><p>Pick a template. Your files and installed apps stay with the workspace.</p></div>
     <div class="dlg-body">
       <div class="catalog" id="catalog"></div>
       <div class="fields">
@@ -225,6 +252,52 @@
   </form>
 </dialog>
 
+<dialog id="template-dialog">
+  <form method="dialog" id="template-form">
+    <div class="dlg-head"><h2 id="template-title">New template</h2><p>A Scraperack image and the size of the machine. Workspaces made from it get these settings.</p></div>
+    <div class="dlg-body">
+      <div class="fields two">
+        <label class="field full">Name<input class="input" name="name" required maxlength="64" placeholder="xfce" autocomplete="off"></label>
+        <label class="field full">Scraperack image<select class="input" name="image" required></select></label>
+      </div>
+      <div class="fields three" style="margin-top:14px">
+        <label class="field">vCPUs<input class="input" name="cpus" type="number" min="0.5" max="64" step="0.5" value="2" required></label>
+        <label class="field">Memory (GiB)<input class="input" name="memory_gib" type="number" min="0.5" max="512" step="0.5" value="2" required></label>
+        <label class="field">Default disk (GiB)<input class="input" name="disk_gib" type="number" min="1" max="4096" value="10" required></label>
+      </div>
+      <div class="hint">Images are imported on Scraperack's Images page. Changing the image, vCPUs or memory
+        makes suspended workspaces of this template start fresh next time; their files are kept.</div>
+      <div class="note" id="template-note"></div>
+    </div>
+    <div class="dlg-foot">
+      <button class="btn danger" id="template-delete" type="button" hidden><svg><use href="#i-trash"/></svg>Delete</button>
+      <span class="spacer"></span>
+      <button class="btn ghost" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" id="template-submit" value="default">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings-dialog">
+  <form method="dialog" id="settings-form">
+    <div class="dlg-head"><h2 id="settings-title">Workspace settings</h2><p>Files and installed apps stay with the workspace whatever you change here.</p></div>
+    <div class="dlg-body">
+      <div class="fields two">
+        <label class="field full">Name<input class="input" name="name" required maxlength="64" autocomplete="off"></label>
+        <label class="field">Template<select class="input" name="template"></select></label>
+        <label class="field">Timezone<input class="input" name="timezone"></label>
+      </div>
+      <div class="hint" id="settings-hint"></div>
+      <div class="note" id="settings-note"></div>
+    </div>
+    <div class="dlg-foot">
+      <span class="spacer"></span>
+      <button class="btn ghost" value="cancel" formnovalidate>Cancel</button>
+      <button class="btn primary" id="settings-submit" value="default">Save</button>
+    </div>
+  </form>
+</dialog>
+
 <div class="toast" id="toast" hidden></div>
 
 <script>
@@ -236,7 +309,7 @@ const BUSY = new Set(["queued", "moving", "starting", "suspending", "stopping"])
 const LIVE = new Set(["queued", "moving", "starting", "running"]);
 const LABEL = {running: "Running", suspended: "Suspended", stopped: "Off", queued: "Queued",
   moving: "Moving", starting: "Starting", suspending: "Saving", stopping: "Shutting down"};
-let workspaces = [], desktops = [], current = null, sessionTimer = null, dashTimer = null,
+let workspaces = [], templates = [], current = null, sessionTimer = null, dashTimer = null,
     stageKey = "", stageSince = 0, toastTimer = null;
 
 async function api(method, path, body) {
@@ -290,7 +363,7 @@ function primary(w) {
 function renderCards() {
   const cards = workspaces.map(w => {
     const [action, label, icon, disabled] = primary(w);
-    const meta = [w.desktop_name, w.node_name || w.volume_node_name,
+    const meta = [w.template_name || "no template", w.node_name || w.volume_node_name,
       w.status === "running" ? `started ${ago(w.started_at_ms)}` : w.stopped_at_ms ? `used ${ago(w.stopped_at_ms)}` : ""]
       .filter(Boolean).join(" · ");
     return `<article class="card" data-id="${esc(w.id)}">
@@ -311,7 +384,7 @@ function renderCards() {
   });
   cards.push(`<article class="card new-card" data-action="new"><div>
       <div class="plus"><svg width="20" height="20"><use href="#i-plus"/></svg></div>
-      <b>New workspace</b><div style="font-size:12.5px;margin-top:4px">Pick a desktop to start from</div></div></article>`);
+      <b>New workspace</b><div style="font-size:12.5px;margin-top:4px">Made from a template</div></div></article>`);
   if (!workspaces.length) {
     cards.unshift(`<div class="empty"><div class="big-icon"><svg><use href="#i-monitor"/></svg></div>
       <h2>No workspaces yet</h2><div>Create one and it opens right here, ready to use in a few seconds.</div></div>`);
@@ -330,6 +403,7 @@ function openMenu(button, w) {
   const items = [];
   if (["running", "starting"].includes(w.status)) items.push(["suspend", "Suspend", "i-moon"]);
   if (LIVE.has(w.status)) items.push(["stop", "Shut down", "i-power"]);
+  if (!BUSY.has(w.status)) items.push(["settings", "Settings", "i-gear"]);
   if (["stopped", "suspended"].includes(w.status)) items.push(["delete", "Delete", "i-trash", "danger"]);
   if (!items.length) items.push(["", "Busy…", "i-dots"]);
   const menu = document.createElement("div");
@@ -353,6 +427,7 @@ $("cards").addEventListener("click", async event => {
     else if (action === "open") location.hash = `#/w/${w.id}`;
     else if (action === "suspend") { await api("POST", `workspaces/${w.id}/suspend`); toast(`Saving ${w.name}…`); }
     else if (action === "stop") { await api("POST", `workspaces/${w.id}/stop`); toast(`Shutting down ${w.name}…`); }
+    else if (action === "settings") return openSettings(w);
     else if (action === "delete") {
       if (!confirm(`Delete ${w.name}? Its files and installed apps are removed for good.`)) return;
       await api("DELETE", `workspaces/${w.id}`); toast(`Deleted ${w.name}`);
@@ -363,35 +438,42 @@ $("cards").addEventListener("click", async event => {
 document.addEventListener("click", event => { if (!event.target.closest(".menu-wrap")) closeMenus(); });
 
 // --- New workspace -------------------------------------------------------------------
-async function openCreate() {
-  try { desktops = (await api("GET", "desktops")).filter(d => d.ready); }
+const gib = mib => `${+(mib / 1024).toFixed(1)} GiB`;
+const size = t => `${t.cpu_millis / 1000} vCPU · ${gib(t.memory_mib)} RAM`;
+async function openCreate(templateId) {
+  let ready;
+  try { templates = await api("GET", "templates"); ready = templates.filter(t => t.ready); }
   catch (error) { return toast(error.message, true); }
   const form = $("create-form");
-  $("catalog").innerHTML = desktops.length ? desktops.map((d, index) => `
-    <label class="tile"><input type="radio" name="desktop" value="${esc(d.id)}" ${index ? "" : "checked"}>
-      <span class="logo" style="--thumb:${thumb(d.name)}"><svg><use href="#i-monitor"/></svg></span>
-      <span><b>${esc(d.name)}</b><span>${d.cpu_millis / 1000} vCPU · ${(d.memory_mib / 1024).toFixed(d.memory_mib % 1024 ? 1 : 0)} GiB RAM</span></span>
+  const chosen = ready.find(t => t.id === templateId) || ready[0];
+  $("catalog").innerHTML = ready.length ? ready.map(t => `
+    <label class="tile"><input type="radio" name="template" value="${esc(t.id)}" ${t === chosen ? "checked" : ""}>
+      <span class="logo" style="--thumb:${thumb(t.name)}"><svg><use href="#i-monitor"/></svg></span>
+      <span><b>${esc(t.name)}</b><span>${size(t)}</span></span>
     </label>`).join("")
-    : `<div class="note error">No desktops are ready yet. An admin adds them on the Scraperack plugin page.</div>`;
-  form.disk_gib.value = desktops[0]?.disk_gib || 10;
+    : `<div class="note error">No template is ready yet. <a href="#/templates" data-close>Add one on the Templates tab.</a></div>`;
+  form.disk_gib.value = chosen?.disk_gib || 10;
   form.timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
   form.name.value = "";
   $("create-note").textContent = "";
   $("create-note").className = "note";
-  $("create-submit").disabled = !desktops.length;
+  $("create-submit").disabled = !ready.length;
   $("create").showModal();
   form.name.focus();
 }
-$("new-button").onclick = openCreate;
+$("new-button").onclick = () => openCreate();
 $("catalog").addEventListener("change", event => {
-  const desktop = desktops.find(d => d.id === event.target.value);
-  if (desktop) $("create-form").disk_gib.value = desktop.disk_gib;
+  const template = templates.find(t => t.id === event.target.value);
+  if (template) $("create-form").disk_gib.value = template.disk_gib;
+});
+$("catalog").addEventListener("click", event => {
+  if (event.target.closest("[data-close]")) $("create").close();
 });
 $("create-form").addEventListener("submit", async event => {
   if (event.submitter?.value === "cancel") return;
   event.preventDefault();
   const form = event.target;
-  const body = {name: form.name.value.trim(), desktop: form.desktop?.value,
+  const body = {name: form.name.value.trim(), template: form.template?.value,
     disk_gib: Number(form.disk_gib.value), timezone: form.timezone.value.trim() || "UTC"};
   $("create-submit").disabled = true;
   $("create-note").textContent = "Creating…";
@@ -403,6 +485,160 @@ $("create-form").addEventListener("submit", async event => {
     $("create-note").textContent = error.message;
     $("create-note").className = "note error";
   } finally { $("create-submit").disabled = false; }
+});
+
+// --- Templates ------------------------------------------------------------------------
+let editingTemplate = null;
+function renderTemplates() {
+  const cards = templates.map(t => {
+    const image = coreImages[t.image]?.name || "image missing";
+    const used = t.workspaces === 1 ? "1 workspace" : `${t.workspaces || 0} workspaces`;
+    return `<article class="card" data-id="${esc(t.id)}">
+      <div class="thumb" style="--thumb:${thumb(t.name)}" data-template="edit">
+        <span class="badge ${t.ready ? "running" : "busy"}"><span class="dot"></span>${t.ready ? "Ready" : "Preparing"}</span>
+        <svg class="monitor"><use href="#i-layers"/></svg>
+      </div>
+      <div class="card-body">
+        <div class="card-title" title="${esc(t.name)}">${esc(t.name)}</div>
+        <div class="card-meta" title="${esc(image)}">${esc(image)} · ${used}</div>
+        <div class="specs"><span class="spec">${t.cpu_millis / 1000} vCPU</span><span class="spec">${gib(t.memory_mib)} RAM</span>
+          <span class="spec">${t.disk_gib} GiB disk</span></div>
+      </div>
+      <div class="card-foot">
+        <button class="btn primary small" data-template="use" ${t.ready ? "" : "disabled"}><svg><use href="#i-plus"/></svg>New workspace</button>
+        <button class="btn small" data-template="edit"><svg><use href="#i-gear"/></svg>Edit</button>
+      </div>
+    </article>`;
+  });
+  cards.push(`<article class="card new-card" data-template="new"><div>
+      <div class="plus"><svg width="20" height="20"><use href="#i-plus"/></svg></div>
+      <b>New template</b><div style="font-size:12.5px;margin-top:4px">An image and a machine size</div></div></article>`);
+  if (!templates.length) {
+    cards.unshift(`<div class="empty"><div class="big-icon"><svg><use href="#i-layers"/></svg></div>
+      <h2>No templates yet</h2><div>Add one to say what new workspaces are made from: an image and how big their machine is.</div></div>`);
+  }
+  $("template-cards").innerHTML = cards.join("");
+}
+let coreImages = {};
+async function loadImages() {
+  try { coreImages = Object.fromEntries((await api("GET", "images")).map(i => [i.id, i])); }
+  catch { /* names are a nicety */ }
+}
+async function refreshTemplates() {
+  try {
+    if (!Object.keys(coreImages).length) await loadImages();
+    templates = await api("GET", "templates");
+    renderTemplates();
+  } catch (error) { toast(error.message, true); }
+}
+async function openTemplate(t) {
+  editingTemplate = t;
+  await loadImages();
+  const form = $("template-form");
+  const images = Object.values(coreImages).filter(i => i.ready || i.id === t?.image)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  form.image.innerHTML = images.length
+    ? images.map(i => `<option value="${esc(i.id)}">${esc(i.name)}</option>`).join("")
+    : `<option value="">No images: import one on Scraperack's Images page</option>`;
+  const value = t || {name: "", cpu_millis: 2000, memory_mib: 2048, disk_gib: 10};
+  form.name.value = value.name;
+  if (t) form.image.value = t.image;
+  form.cpus.value = value.cpu_millis / 1000;
+  form.memory_gib.value = +(value.memory_mib / 1024).toFixed(2);
+  form.disk_gib.value = value.disk_gib;
+  $("template-title").textContent = t ? `Edit ${t.name}` : "New template";
+  $("template-submit").textContent = t ? "Save" : "Add template";
+  $("template-delete").hidden = !t;
+  $("template-delete").disabled = Boolean(t?.workspaces);
+  $("template-delete").title = t?.workspaces ? "Workspaces still use this template" : "";
+  $("template-note").textContent = "";
+  $("template-note").className = "note";
+  $("template-dialog").showModal();
+  form.name.focus();
+}
+$("new-template-button").onclick = () => openTemplate(null);
+$("template-cards").addEventListener("click", event => {
+  const target = event.target.closest("[data-template]");
+  if (!target) return;
+  if (target.dataset.template === "new") return openTemplate(null);
+  const t = templates.find(item => item.id === target.closest(".card")?.dataset.id);
+  if (!t) return;
+  if (target.dataset.template === "use") { location.hash = ""; openCreate(t.id); }
+  else openTemplate(t);
+});
+$("template-form").addEventListener("submit", async event => {
+  if (event.submitter?.value === "cancel") return;
+  event.preventDefault();
+  const form = event.target;
+  const body = {name: form.name.value.trim(), image: form.image.value,
+    cpu_millis: Math.round(Number(form.cpus.value) * 1000),
+    memory_mib: Math.round(Number(form.memory_gib.value) * 1024), disk_gib: Number(form.disk_gib.value)};
+  $("template-submit").disabled = true;
+  $("template-note").textContent = "Saving…";
+  $("template-note").className = "note";
+  try {
+    if (editingTemplate) await api("PUT", `templates/${editingTemplate.id}`, body);
+    else await api("POST", "templates", body);
+    $("template-dialog").close();
+    toast(editingTemplate ? `Saved ${body.name}` : `Added ${body.name}; it is being prepared`);
+    refreshTemplates();
+  } catch (error) {
+    $("template-note").textContent = error.message;
+    $("template-note").className = "note error";
+  } finally { $("template-submit").disabled = false; }
+});
+$("template-delete").onclick = async () => {
+  const t = editingTemplate;
+  if (!t || !confirm(`Delete the template ${t.name}? Workspaces made from it must be gone first.`)) return;
+  try {
+    await api("DELETE", `templates/${t.id}`);
+    $("template-dialog").close();
+    toast(`Deleted ${t.name}`);
+    refreshTemplates();
+  } catch (error) {
+    $("template-note").textContent = error.message;
+    $("template-note").className = "note error";
+  }
+};
+
+// --- Workspace settings -----------------------------------------------------------------
+let editingWorkspace = null;
+async function openSettings(w) {
+  editingWorkspace = w;
+  try { templates = await api("GET", "templates"); }
+  catch (error) { return toast(error.message, true); }
+  const form = $("settings-form");
+  const off = ["stopped", "suspended"].includes(w.status);
+  form.template.innerHTML = (w.template_name ? "" : `<option value="">(deleted)</option>`) + templates.map(t =>
+    `<option value="${esc(t.id)}">${esc(t.name)} · ${size(t)}</option>`).join("");
+  form.template.value = w.template_name ? w.template : "";
+  form.template.disabled = !off;
+  form.name.value = w.name;
+  form.timezone.value = w.timezone || "UTC";
+  $("settings-title").textContent = `${w.name} settings`;
+  $("settings-hint").textContent = off
+    ? (w.status === "suspended" ? "Changing the template makes it start fresh next time instead of resuming; files are kept." : "")
+    : "Shut the workspace down to change its template. A new timezone applies from its next start.";
+  $("settings-note").textContent = "";
+  $("settings-note").className = "note";
+  $("settings-dialog").showModal();
+}
+$("settings-form").addEventListener("submit", async event => {
+  if (event.submitter?.value === "cancel") return;
+  event.preventDefault();
+  const form = event.target;
+  const body = {name: form.name.value.trim(), timezone: form.timezone.value.trim() || "UTC"};
+  if (!form.template.disabled && form.template.value) body.template = form.template.value;
+  $("settings-submit").disabled = true;
+  try {
+    await api("PATCH", `workspaces/${editingWorkspace.id}`, body);
+    $("settings-dialog").close();
+    toast(`Saved ${body.name}`);
+    refreshDashboard();
+  } catch (error) {
+    $("settings-note").textContent = error.message;
+    $("settings-note").className = "note error";
+  } finally { $("settings-submit").disabled = false; }
 });
 
 // --- Session: progress here, then the desktop page in the workspace's microVM ------------
@@ -492,10 +728,16 @@ function leaveSession() {
   current = null;
   $("session").hidden = true;
   $("dashboard").hidden = false;
-  document.title = "Workspaces";
-  refreshDashboard();
+  const onTemplates = location.hash === "#/templates";
+  $("view-workspaces").hidden = onTemplates;
+  $("view-templates").hidden = !onTemplates;
+  $("nav-workspaces").classList.toggle("on", !onTemplates);
+  $("nav-templates").classList.toggle("on", onTemplates);
+  document.title = onTemplates ? "Templates · Workspaces" : "Workspaces";
+  const refresh = onTemplates ? refreshTemplates : refreshDashboard;
+  refresh();
   clearInterval(dashTimer);
-  dashTimer = setInterval(refreshDashboard, 3000);
+  dashTimer = setInterval(refresh, onTemplates ? 5000 : 3000);
 }
 
 // --- Routing ------------------------------------------------------------------------------

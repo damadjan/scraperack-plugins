@@ -13,41 +13,54 @@ for its files.
    ```
 
 2. Build [`workspaces/images/xfce-desktop`](../workspaces/images/xfce-desktop), push it to a
-   registry, and import it on the **Images** page.
-3. On the plugin's **Desktops** tab, add a desktop: the image, CPU, memory, and the default
-   disk size for new workspaces.
-4. On **Workspaces**, create a workspace and click **Open** once it is running.
+   registry, and import it on Scraperack's **Images** page.
+3. On the plugin's entry in Scraperack, click **Open Workspaces**. Everything else happens on
+   the plugin's own page:
 
-## Portal
+   ```
+   http://<controller>:7070/plugins/workspaces/gui/portal/
+   ```
 
-People use their workspaces from the portal, not the Scraperack admin page:
+4. On **Templates**, add a template: a Scraperack image, vCPUs, memory, and the default disk
+   size for new workspaces.
+5. On **Workspaces**, create a workspace from a template; it opens as soon as it is ready.
 
-```
-http://<controller>:7070/plugins/workspaces/gui/portal/
-```
+## Templates and workspaces
 
-(**Open portal** on the plugin's page links to it.)
+- **Template:** the configuration: a Scraperack image (what is installed) plus the size of the
+  machine (vCPUs, memory) and the default disk size. Behind each template is one pool whose
+  snapshot holds a running desktop, so every workspace made from it starts in seconds.
+- **Workspace:** a copy of a template that one person uses. It keeps its own files, installed
+  software and, when suspended, its open windows on its own volume.
 
-- **Your workspaces:** a card per workspace with its status, desktop and node; one click
-  launches, resumes or opens it. Suspend, shut down and delete are in its menu.
-- **New workspace:** pick a desktop from the catalog, name it, choose disk size and
-  timezone; it opens as soon as it is ready.
-- **Session:** while the workspace starts (queued, moving to another node, starting) the
-  portal shows where it is; then the browser opens the desktop page, served from inside the
+A workspace's machine size comes from its template. For a bigger machine, add a bigger
+template and switch the workspace to it (**Settings** in its menu, while it is shut down or
+suspended); its files and software stay.
+
+## The plugin's page
+
+- **Workspaces:** a card per workspace with its status, template and node; one click
+  launches, resumes or opens it. Its menu has suspend, shut down, settings (name, template,
+  timezone) and delete.
+- **New workspace:** pick a template, name it, choose disk size and timezone.
+- **Templates:** a card per template with its image, size and how many workspaces use it;
+  add, edit, delete (only when no workspace uses it), or make a workspace from it.
+- **Session:** while the workspace starts (queued, moving to another node, starting) the page
+  shows where it is; then the browser opens the desktop page, served from inside the
   workspace's microVM. The desktop fills the window and follows its size. The handle on
-  the left edge opens the controls: back to the portal, fullscreen, clipboard both ways,
+  the left edge opens the controls: back to the workspaces, fullscreen, clipboard both ways,
   Ctrl+Alt+Del, Esc and Super, picture quality, view only, suspend and shut down.
 
 The desktop page (`guest/viewer.html`) shows KasmVNC's web client in a full-window frame,
 without Kasm's control bar. KasmVNC serves both from the microVM, on the same origin as the
 VNC connection, so the page drives the client with its `postMessage` API (clipboard,
-picture quality) and types keys into it directly. The portal hands the page the password,
+picture quality) and types keys into it directly. The plugin's page hands it the password,
 its own address and the workspace in the URL fragment; Back, Suspend and Shut down return
-to the portal, which does the work. Plain HTML, CSS and JavaScript, no framework.
+to the plugin's page, which does the work. Plain HTML, CSS and JavaScript, no framework.
 
 ## How it works
 
-- **Desktop:** one pool per desktop. Before the pool's snapshot is taken, the executor
+- **Template:** one pool per template. Before the pool's snapshot is taken, the executor
   starts the whole desktop: KasmVNC's `Xvnc` (it serves its web client and the VNC
   WebSocket on port 6080) and XFCE as `user` with a fresh home folder. Every workspace restores with it already running
   (about 5 seconds to a usable desktop on the test cluster).
@@ -58,9 +71,9 @@ to the portal, which does the work. Plain HTML, CSS and JavaScript, no framework
   fresh home folder onto the volume; a workspace that already has a home starts XFCE again
   on it (a few seconds, the programs are already in memory). Each start sets a new VNC
   password and the workspace's timezone.
-- **Open** links to KasmVNC's own page on the workspace's node with that start's
-  password; the desktop follows the browser window's size.
-- **Suspend** saves the running microVM with its volume: as much disk as the desktop's
+- A workspace's `url` (API) is KasmVNC's own page on its node with that start's password;
+  `viewer_url` is the desktop page the plugin's page opens.
+- **Suspend** saves the running microVM with its volume: as much disk as the template's
   memory, written at the node's disk speed (20 s to 2 minutes for 2 GiB here). **Resume**
   brings it back with every window open in about 5 seconds; a new password is set.
 - **Stop** logs the user out and ends the microVM; the core forces it after 20 seconds.
@@ -70,13 +83,13 @@ to the portal, which does the work. Plain HTML, CSS and JavaScript, no framework
   shows **moving** meanwhile.
 - A running workspace ends after 30 days.
 
-Changing a desktop's image, CPU, or memory makes its suspended workspaces start fresh next
-time; their files are kept. Software installed on top of one image version stays on the
+Changing a template's image, vCPUs, or memory makes its suspended workspaces start fresh
+next time; their files are kept. Software installed on top of one image version stays on the
 volume when the image changes.
 
 ## Images
 
-A desktop image needs, besides `/usr/bin/python3`: KasmVNC (`Xkasmvnc` and its web client
+An image for a template needs, besides `/usr/bin/python3`: KasmVNC (`Xkasmvnc` and its web client
 in `/usr/share/kasmvnc/www`), `dbus-daemon`, `xfce4-session`, a `user` account, `/mnt/workspace`, and `/etc/machine-id` linked to `/run/machine-id`. The microVM's
 hostname is `workspace`. The
 [`xfce-desktop`](../workspaces/images/xfce-desktop/Dockerfile) image is a small Debian
@@ -111,15 +124,19 @@ checksum.
 | Method and path | Body | Result |
 |---|---|---|
 | `GET /workspaces` | | Workspaces with `status`, `url`, node, and any move |
-| `POST /workspaces` | `{name, desktop?, disk_gib?, timezone?, start?}` | 201, workspace (started unless `start` is false) |
+| `POST /workspaces` | `{name, template?, disk_gib?, timezone?, start?}` | 201, workspace (started unless `start` is false) |
 | `GET /workspaces/{id or name}` | | Workspace |
-| `PATCH /workspaces/{id or name}` | `{name?, timezone?, desktop?}` | Workspace |
+| `PATCH /workspaces/{id or name}` | `{name?, timezone?, template?}` | Workspace; `template` only while shut down or suspended |
 | `POST /workspaces/{id}/start` | | Starts or resumes |
 | `POST /workspaces/{id}/suspend` | | Saves the running desktop |
 | `POST /workspaces/{id}/stop` | | Logs out and stops |
 | `DELETE /workspaces/{id}` | | 204; deletes the volume (only when stopped or suspended) |
-| `GET /desktops`, `POST /desktops` | `{name, image, cpu_millis?, memory_mib?, disk_gib?}` | Desktops |
-| `GET`, `PUT`, `DELETE /desktops/{id or name}` | | Desktop; delete only without workspaces |
+| `GET /templates`, `POST /templates` | `{name, image, cpu_millis?, memory_mib?, disk_gib?}` | Templates, with `ready` and how many `workspaces` use each |
+| `GET`, `PUT`, `DELETE /templates/{id or name}` | | Template; delete only without workspaces |
+| `GET /images` | | Scraperack's images, to pick one for a template |
+
+Plugin 0.4 renamed desktops to templates (`/desktops` and the `desktop` field are gone);
+existing data is converted when the plugin starts.
 
 Statuses: `stopped`, `queued`, `moving`, `starting`, `running`, `suspending`, `suspended`,
 `stopping`.

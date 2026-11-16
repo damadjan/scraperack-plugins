@@ -10,8 +10,9 @@ tar -czf workspaces-plugin.tar.gz -C plugin .
 ```
 
 Install the archive from **Plugins → Install plugin**, import the
-[`xfce-desktop`](images/xfce-desktop) image on the **Images** page, add a desktop on the
-plugin's **Desktops** tab, then create a workspace.
+[`xfce-desktop`](images/xfce-desktop) image on the **Images** page, click **Open Workspaces**
+on the plugin's entry, add a template (image and machine size) on **Templates**, then create a
+workspace from it.
 
 Needs a Scraperack core with volumes (see its `docs/volumes.md`).
 
