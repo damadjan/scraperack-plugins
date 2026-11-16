@@ -1,6 +1,6 @@
 """Scraperack workspaces plugin: long-lived desktops in microVMs.
 
-Desktops: an image (with XFCE, TigerVNC and noVNC) plus VM size. Each desktop has a pool
+Desktops: an image (with XFCE and KasmVNC) plus VM size. Each desktop has a pool
 whose snapshot holds a running display, and a volume mount at /mnt/workspace.
 
 Workspaces: one volume each, holding the home folder and changes to system folders. Start
@@ -293,7 +293,7 @@ def workspace_view(workspace, desktops, volumes=None, nodes=None):
     base = f"http://{workspace['host']}:{ports['vnc']}" if live else None
     view["url"] = (f"{base}/vnc.html?autoconnect=1&resize=remote&reconnect=1&password={password}"
                    if live else None)
-    # The portal's toolbar-less viewer; the password stays in the fragment.
+    # The portal's workspace page around KasmVNC's client; the password stays in the fragment.
     view["viewer_url"] = f"{base}/workspace.html#password={password}" if live else None
     return view
 
