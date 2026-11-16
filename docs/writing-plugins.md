@@ -52,6 +52,7 @@ plugin:
 - Pools it creates get `managed_by: "plugin:<name>"`. Only it can change or delete them, and
   they are removed with the plugin.
 - Disks it uploads are owned by it and removed with it.
+- Volumes it creates are owned by it: only it can attach or delete them.
 - Tasks on its pools record `owner: "plugin:<name>"`; list them with
   `GET /v1/tasks?owner=plugin:<name>`.
 
@@ -61,6 +62,7 @@ plugin:
 | `/v1/disks` | Upload read-only ext4 disks; nodes fetch them on demand |
 | `/v1/images` | Root filesystems imported from Docker images |
 | `/v1/tasks` | Send payloads to a pool's executor and read results, logs, metrics |
+| `/v1/volumes` | Persistent disks a task mounts at its pool's `volume_mount`; suspend and resume with `POST /v1/tasks/{id}/stop` |
 | `/v1/vms`, `/v1/nodes` | Live inventory |
 
 A plugin that turns tasks into something users recognize (executions, crawls, sessions)
