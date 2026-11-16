@@ -1,6 +1,6 @@
 name = "workspaces"
-version = "0.3.0"
-description = "Long-lived desktops in microVMs: XFCE in the browser over KasmVNC, home folder and installed software kept on a volume, suspend and resume with open windows, moved to a node with room when needed."
+version = "0.4.0"
+description = "Long-lived desktops in microVMs, made from templates (image plus machine size): XFCE in the browser over KasmVNC, home folder and installed software kept on a volume, suspend and resume with open windows, moved to a node with room when needed."
 run = ["python3", "service.py"]
 gui = true
 guest = "guest"

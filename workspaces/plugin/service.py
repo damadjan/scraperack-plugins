@@ -1,9 +1,10 @@
 """Scraperack workspaces plugin: long-lived desktops in microVMs.
 
-Desktops: an image (with XFCE and KasmVNC) plus VM size. Each desktop has a pool
-whose snapshot holds a running display, and a volume mount at /mnt/workspace.
+Templates: a Scraperack image (with XFCE and KasmVNC) plus VM size; the configuration
+workspaces are made from. Each template has a pool whose snapshot holds a running desktop,
+and a volume mount at /mnt/workspace.
 
-Workspaces: one volume each, holding the home folder and changes to system folders. Start
+Workspaces: copies of a template, one volume each, holding the home folder and changes to system folders. Start
 runs one core task with the volume; the guest executor starts the desktop session.
 Suspend saves the running microVM with the volume; the next start resumes it. When the
 workspace's node is full, the core moves the volume to a node with room first.
@@ -38,7 +39,7 @@ HERE = Path(__file__).resolve().parent
 
 GUEST_MOUNT = "/tmp/scraperack/workspaces"
 VOLUME_MOUNT = "/mnt/workspace"
-DESKTOPS = DATA / "desktops.json"
+TEMPLATES = DATA / "templates.json"
 WORKSPACES = DATA / "workspaces.json"
 FINISHED = {"succeeded", "failed", "timed_out"}
 ACTIVE = {"queued", "moving", "starting", "running", "stopping", "suspending"}
@@ -47,7 +48,7 @@ SESSION_TIMEOUT = 30 * 24 * 3600  # a running workspace ends after 30 days
 STOP_GRACE = 20                   # seconds for a logout before the core stops the VM
 MONITOR_INTERVAL = 2.0
 
-DESKTOP_DEFAULTS = {"cpu_millis": 2000, "memory_mib": 2048, "disk_gib": 10}
+TEMPLATE_DEFAULTS = {"cpu_millis": 2000, "memory_mib": 2048, "disk_gib": 10}
 lock = threading.RLock()
 
 
@@ -127,35 +128,35 @@ def check_name(name, kind):
     return name
 
 
-# --- Desktops: image and VM size, one pool each ----------------------------------------------
+# --- Templates: image and VM size, one pool each ----------------------------------------------
 
-def normalize_desktop(request, current=None):
-    desktop = {**DESKTOP_DEFAULTS, **(current or {})}
-    for field in ("name", "image", *DESKTOP_DEFAULTS):
+def normalize_template(request, current=None):
+    template = {**TEMPLATE_DEFAULTS, **(current or {})}
+    for field in ("name", "image", *TEMPLATE_DEFAULTS):
         if field in request:
-            desktop[field] = request[field]
-    desktop["name"] = check_name(desktop.get("name"), "desktop")
-    if not desktop.get("image"):
+            template[field] = request[field]
+    template["name"] = check_name(template.get("name"), "template")
+    if not template.get("image"):
         raise ApiError(400, "image (a Scraperack image id) is required")
-    for field in DESKTOP_DEFAULTS:
-        desktop[field] = int(desktop[field])
-        if desktop[field] < 1:
+    for field in TEMPLATE_DEFAULTS:
+        template[field] = int(template[field])
+        if template[field] < 1:
             raise ApiError(400, f"{field} must be positive")
-    if desktop["memory_mib"] < 512:
-        raise ApiError(400, "a desktop needs at least 512 MiB of memory")
-    return desktop
+    if template["memory_mib"] < 512:
+        raise ApiError(400, "a template needs at least 512 MiB of memory")
+    return template
 
 
-def pool_spec(desktop):
+def pool_spec(template):
     if not GUEST_DISK:
         raise ApiError(500, "the plugin's guest disk is missing")
     return {
-        "name": desktop["pool"],
-        "image": desktop["image"],
+        "name": template["pool"],
+        "image": template["image"],
         "warm_instances": 0,
         "max_instances": None,
-        "cpu_millis": desktop["cpu_millis"],
-        "memory_mib": desktop["memory_mib"],
+        "cpu_millis": template["cpu_millis"],
+        "memory_mib": template["memory_mib"],
         "disk_mib": 1024,
         "timeout_secs": SESSION_TIMEOUT + 3600,
         "idle_timeout_secs": 0,
@@ -167,15 +168,15 @@ def pool_spec(desktop):
         "disks": [{"key": GUEST_DISK, "mount": GUEST_MOUNT}],
         "executor": ["/usr/bin/python3", f"{GUEST_MOUNT}/executor.py"],
         "volume_mount": VOLUME_MOUNT,
-        "aliases": [desktop["id"]],
-        "display_name": f"Workspaces: {desktop['name']}",
+        "aliases": [template["id"]],
+        "display_name": f"Workspaces: {template['name']}",
     }
 
 
-def apply_pool(desktop):
-    spec = pool_spec(desktop)
+def apply_pool(template):
+    spec = pool_spec(template)
     try:
-        return core("PUT", f"/v1/pools/{desktop['pool']}", spec)
+        return core("PUT", f"/v1/pools/{template['pool']}", spec)
     except ApiError as error:
         if error.status != 404:
             raise
@@ -186,51 +187,76 @@ def pools_by_name():
     return {pool["name"]: pool for pool in core("GET", "/v1/pools")}
 
 
-def desktop_view(desktop, pools):
-    return {**desktop, "ready": bool(pools.get(desktop["pool"], {}).get("ready"))}
+def template_view(template, pools, workspaces=None):
+    view = {**template, "ready": bool(pools.get(template["pool"], {}).get("ready"))}
+    if workspaces is not None:
+        view["workspaces"] = sum(w["template"] == template["id"] for w in workspaces.values())
+    return view
 
 
-def list_desktops():
+def list_templates():
     pools = pools_by_name()
     with lock:
-        desktops = load(DESKTOPS)
-    return sorted((desktop_view(d, pools) for d in desktops.values()),
-                  key=lambda d: d["name"].lower())
+        templates, workspaces = load(TEMPLATES), load(WORKSPACES)
+    return sorted((template_view(t, pools, workspaces) for t in templates.values()),
+                  key=lambda t: t["name"].lower())
 
 
-def save_desktop(key, request):
+def get_template(key):
     with lock:
-        desktops = load(DESKTOPS)
-        current = dict(find(desktops, key, "desktop")) if key else None
-    desktop = normalize_desktop(request, current)
-    if any(other["name"] == desktop["name"] and other["id"] != desktop.get("id")
-           for other in desktops.values()):
-        raise ApiError(409, "desktop name already exists")
+        template = find(load(TEMPLATES), key, "template")
+        workspaces = load(WORKSPACES)
+    return template_view(template, pools_by_name(), workspaces)
+
+
+def save_template(key, request):
+    with lock:
+        templates = load(TEMPLATES)
+        current = dict(find(templates, key, "template")) if key else None
+    template = normalize_template(request, current)
+    if any(other["name"] == template["name"] and other["id"] != template.get("id")
+           for other in templates.values()):
+        raise ApiError(409, "template name already exists")
     if not key:
-        desktop["id"] = str(uuid.uuid4())
-        desktop["pool"] = f"workspaces-{desktop['id']}"
-    apply_pool(desktop)
+        template["id"] = str(uuid.uuid4())
+        template["pool"] = f"workspaces-{template['id']}"
+    apply_pool(template)
     with lock:
-        desktops = load(DESKTOPS)
-        desktops[desktop["id"]] = desktop
-        save(DESKTOPS, desktops)
-    return desktop_view(desktop, pools_by_name())
+        templates = load(TEMPLATES)
+        templates[template["id"]] = template
+        save(TEMPLATES, templates)
+    return get_template(template["id"])
 
 
-def delete_desktop(key):
+def delete_template(key):
     with lock:
-        desktop = find(load(DESKTOPS), key, "desktop")
-        if any(w["desktop"] == desktop["id"] for w in load(WORKSPACES).values()):
-            raise ApiError(409, "workspaces still use this desktop; delete or move them first")
+        template = find(load(TEMPLATES), key, "template")
+        if any(w["template"] == template["id"] for w in load(WORKSPACES).values()):
+            raise ApiError(409, "workspaces still use this template; delete them or move them to "
+                                "another template first")
     try:
-        core("DELETE", f"/v1/pools/{desktop['pool']}")
+        core("DELETE", f"/v1/pools/{template['pool']}")
     except ApiError as error:
         if error.status != 404:
             raise
     with lock:
-        desktops = load(DESKTOPS)
-        desktops.pop(desktop["id"], None)
-        save(DESKTOPS, desktops)
+        templates = load(TEMPLATES)
+        templates.pop(template["id"], None)
+        save(TEMPLATES, templates)
+
+
+def migrate():
+    """Data from before templates were called desktops (plugin 0.3 and older)."""
+    old = DATA / "desktops.json"
+    with lock:
+        if old.exists() and not TEMPLATES.exists():
+            old.replace(TEMPLATES)
+        workspaces = load(WORKSPACES)
+        if any("desktop" in w for w in workspaces.values()):
+            for workspace in workspaces.values():
+                if "desktop" in workspace:
+                    workspace["template"] = workspace.pop("desktop")
+            save(WORKSPACES, workspaces)
 
 
 # --- Workspaces --------------------------------------------------------------------------------
@@ -275,14 +301,14 @@ def control(workspace, method, path, timeout=2):
         return json.loads(response.read() or b"null")
 
 
-def workspace_view(workspace, desktops, volumes=None, nodes=None):
-    desktop = desktops.get(workspace["desktop"])
+def workspace_view(workspace, templates, volumes=None, nodes=None):
+    template = templates.get(workspace["template"])
     volume = (volumes or {}).get(workspace["volume"]) or {}
     view = {key: workspace.get(key) for key in (
-        "id", "name", "status", "desktop", "timezone", "disk_gib", "task", "created_at_ms",
+        "id", "name", "status", "template", "timezone", "disk_gib", "task", "created_at_ms",
         "started_at_ms", "ready_at_ms", "stopped_at_ms", "last_reason", "error", "host",
         "node", "node_name", "volume", "resumed")}
-    view["desktop_name"] = desktop["name"] if desktop else workspace["desktop"]
+    view["template_name"] = template["name"] if template else None
     view["volume_node"] = volume.get("node")
     view["volume_node_name"] = ((nodes or {}).get(volume.get("node")) or {}).get("name")
     view["migration"] = volume.get("migration")
@@ -301,41 +327,41 @@ def workspace_view(workspace, desktops, volumes=None, nodes=None):
 def list_workspaces():
     with lock:
         workspaces = list(load(WORKSPACES).values())
-        desktops = load(DESKTOPS)
+        templates = load(TEMPLATES)
     volumes, nodes = volumes_by_name(), nodes_by_id()
-    views = [workspace_view(w, desktops, volumes, nodes) for w in workspaces]
+    views = [workspace_view(w, templates, volumes, nodes) for w in workspaces]
     return sorted(views, key=lambda w: w["name"].lower())
 
 
 def get_workspace(key):
     workspace = get_record(key)
     with lock:
-        desktops = load(DESKTOPS)
-    return workspace_view(workspace, desktops, volumes_by_name(), nodes_by_id())
+        templates = load(TEMPLATES)
+    return workspace_view(workspace, templates, volumes_by_name(), nodes_by_id())
 
 
 def create_workspace(request):
     name = check_name(request.get("name"), "workspace")
     with lock:
-        desktops = load(DESKTOPS)
+        templates = load(TEMPLATES)
         workspaces = load(WORKSPACES)
-    if not desktops:
-        raise ApiError(400, "add a desktop first")
-    key = request.get("desktop")
+    if not templates:
+        raise ApiError(400, "add a template first")
+    key = request.get("template")
     if key:
-        desktop = find(desktops, str(key), "desktop")
-    elif len(desktops) == 1:
-        desktop = next(iter(desktops.values()))
+        template = find(templates, str(key), "template")
+    elif len(templates) == 1:
+        template = next(iter(templates.values()))
     else:
-        raise ApiError(400, "desktop is required when more than one exists")
+        raise ApiError(400, "template is required when more than one exists")
     if any(w["name"] == name for w in workspaces.values()):
         raise ApiError(409, "workspace name already exists")
-    disk_gib = int(request.get("disk_gib") or desktop["disk_gib"])
+    disk_gib = int(request.get("disk_gib") or template["disk_gib"])
     if not 1 <= disk_gib <= 4096:
         raise ApiError(400, "disk_gib must be 1-4096")
     workspace_id = str(uuid.uuid4())
     workspace = {
-        "id": workspace_id, "name": name, "desktop": desktop["id"],
+        "id": workspace_id, "name": name, "template": template["id"],
         "volume": f"workspace-{workspace_id}", "disk_gib": disk_gib,
         "timezone": str(request.get("timezone") or "UTC"), "status": "stopped",
         "task": None, "created_at_ms": now_ms(),
@@ -361,11 +387,13 @@ def edit_workspace(key, request):
                 raise ApiError(409, "workspace name already exists")
     if "timezone" in request:
         changes["timezone"] = str(request["timezone"] or "UTC")
-    if "desktop" in request:
-        if workspace["status"] in ACTIVE:
-            raise ApiError(409, "stop the workspace before changing its desktop")
+    if "template" in request:
         with lock:
-            changes["desktop"] = find(load(DESKTOPS), str(request["desktop"]), "desktop")["id"]
+            template = find(load(TEMPLATES), str(request["template"]), "template")["id"]
+        if template != workspace["template"]:
+            if workspace["status"] in ACTIVE:
+                raise ApiError(409, "shut the workspace down before changing its template")
+            changes["template"] = template
     update_workspace(workspace["id"], **changes)
     return get_workspace(workspace["id"])
 
@@ -380,12 +408,12 @@ def start_workspace(key):
     if workspace["status"] in ACTIVE:
         return get_workspace(workspace["id"])
     with lock:
-        desktop = load(DESKTOPS).get(workspace["desktop"])
-    if desktop is None:
-        raise ApiError(409, "the workspace's desktop was deleted; pick another one")
+        template = load(TEMPLATES).get(workspace["template"])
+    if template is None:
+        raise ApiError(409, "the workspace's template was deleted; pick another one")
     password = new_password()
     task = core("POST", "/v1/tasks", {
-        "pool": desktop["pool"], "volume": workspace["volume"], "queue": True,
+        "pool": template["pool"], "volume": workspace["volume"], "queue": True,
         "secrets": {"VNC_PASSWORD": password},
         "payload": {"encoding": "workspace-session", "workspace": workspace["id"],
                     "settings": {"timezone": workspace.get("timezone") or "UTC"},
@@ -545,7 +573,7 @@ def monitor():
 
 
 def reconcile():
-    """Make the core's pools match this plugin's desktops after a (re)start."""
+    """Make the core's pools match this plugin's templates after a (re)start."""
     while True:
         try:
             core("GET", "/v1/pools")
@@ -553,12 +581,12 @@ def reconcile():
         except OSError:
             time.sleep(1)
     with lock:
-        desktops = list(load(DESKTOPS).values())
-    for desktop in desktops:
+        templates = list(load(TEMPLATES).values())
+    for template in templates:
         try:
-            apply_pool(desktop)
+            apply_pool(template)
         except Exception:
-            print(f"reconcile {desktop['name']} failed", file=sys.stderr)
+            print(f"reconcile {template['name']} failed", file=sys.stderr)
             traceback.print_exc()
     monitor()
 
@@ -594,20 +622,18 @@ def route(method, path, body, query):
             return 200, action(parts[1])
     if parts == ["images"] and method == "GET":
         return 200, core("GET", "/v1/images")
-    if parts == ["desktops"]:
+    if parts == ["templates"]:
         if method == "GET":
-            return 200, list_desktops()
+            return 200, list_templates()
         if method == "POST":
-            return 201, save_desktop(None, body)
-    if len(parts) == 2 and parts[0] == "desktops":
+            return 201, save_template(None, body)
+    if len(parts) == 2 and parts[0] == "templates":
         if method == "GET":
-            with lock:
-                desktop = find(load(DESKTOPS), parts[1], "desktop")
-            return 200, desktop_view(desktop, pools_by_name())
-        if method == "PUT":
-            return 200, save_desktop(parts[1], body)
+            return 200, get_template(parts[1])
+        if method in ("PUT", "PATCH"):
+            return 200, save_template(parts[1], body)
         if method == "DELETE":
-            delete_desktop(parts[1])
+            delete_template(parts[1])
             return 204, None
     raise ApiError(404, "not found")
 
@@ -666,6 +692,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     DATA.mkdir(parents=True, exist_ok=True)
+    migrate()
     Path(PLUGIN_SOCKET).unlink(missing_ok=True)
     server = ThreadingUnixStreamServer(PLUGIN_SOCKET, Handler)
     server.daemon_threads = True
