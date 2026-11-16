@@ -289,9 +289,12 @@ def workspace_view(workspace, desktops, volumes=None, nodes=None):
     view["migration_error"] = volume.get("migration_error")
     ports = workspace.get("ports") or {}
     live = workspace["status"] in ("starting", "running") and workspace.get("host") and ports.get("vnc")
-    view["url"] = (f"http://{workspace['host']}:{ports['vnc']}/vnc.html?autoconnect=1"
-                   f"&resize=remote&reconnect=1&password={quote(workspace.get('password') or '')}"
+    password = quote(workspace.get("password") or "")
+    base = f"http://{workspace['host']}:{ports['vnc']}" if live else None
+    view["url"] = (f"{base}/vnc.html?autoconnect=1&resize=remote&reconnect=1&password={password}"
                    if live else None)
+    # The portal's toolbar-less viewer; the password stays in the fragment.
+    view["viewer_url"] = f"{base}/workspace.html#password={password}" if live else None
     return view
 
 
@@ -634,6 +637,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if self.command == "GET" and url.path.rstrip("/") in ("/gui", "/gui/index.html"):
                 return self.send(200, (HERE / "gui" / "index.html").read_bytes(),
+                                 "text/html; charset=utf-8")
+            if self.command == "GET" and url.path in ("/gui/portal", "/gui/portal/"):
+                if url.path == "/gui/portal":  # relative links need the trailing slash
+                    self.send_response(301)
+                    self.send_header("Location", "portal/")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                return self.send(200, (HERE / "gui" / "portal.html").read_bytes(),
                                  "text/html; charset=utf-8")
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}") if length else {}

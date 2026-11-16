@@ -183,8 +183,20 @@ def start_display():
     if "websockify" not in processes():
         websockify = shutil.which("websockify") or "/usr/bin/websockify"
         subprocess.Popen(
-            [websockify, "--web", "/usr/share/novnc", str(WEB_PORT), f"127.0.0.1:{VNC_PORT}"],
+            [websockify, "--web", str(web_root()), str(WEB_PORT), f"127.0.0.1:{VNC_PORT}"],
             stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def web_root():
+    """noVNC from the image plus the portal's toolbar-less viewer, served by websockify."""
+    root = Path("/run/novnc-web")
+    root.mkdir(parents=True, exist_ok=True)
+    for entry in Path("/usr/share/novnc").iterdir():
+        link = root / entry.name
+        if not link.exists():
+            link.symlink_to(entry)
+    shutil.copyfile(Path(__file__).resolve().parent / "viewer.html", root / "workspace.html")
+    return root
 
 
 def display_ready():

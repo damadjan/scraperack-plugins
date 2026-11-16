@@ -1,0 +1,245 @@
+<!doctype html>
+<!-- Workspace desktop page: noVNC's client without its toolbar, plus the portal's control
+     panel. websockify serves it from inside the workspace's microVM, so it shares the VNC
+     connection's origin. The portal opens it with a fragment:
+       #password=...&portal=<portal URL>&workspace=<id>&name=<name>
+     Back, Suspend and Shut down return to the portal, which does the work. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspace</title>
+<style>
+  :root { --line: #343445; --card: #14141c; --card-2: #1b1b25; --text: #ececf2; --muted: #9a9aab;
+          --faint: #6b6b7d; --accent: #d946ef; --accent-2: #a855f7; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0b10; color: var(--text);
+               font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  [hidden] { display: none !important; }
+  #screen { position: fixed; inset: 0; }
+  .stage { position: fixed; inset: 0; z-index: 2; display: grid; place-items: center; text-align: center;
+           background: radial-gradient(80% 60% at 50% 40%, #1b1328 0%, #0b0b10 70%); }
+  .stage h2 { margin: 20px 0 6px; font-size: 20px; }
+  .stage p { margin: 0; color: var(--muted); }
+  .stage .actions { display: flex; gap: 10px; justify-content: center; margin-top: 20px; }
+  .spinner { width: 50px; height: 50px; margin: 0 auto; border-radius: 50%;
+             border: 3px solid rgba(255, 255, 255, .1); border-top-color: var(--accent);
+             animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 32px;
+         padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--card-2);
+         font-size: 13px; font-weight: 600; white-space: nowrap; flex: 1; }
+  .btn:hover { background: #232330; border-color: #46465a; }
+  .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 0; color: #fff; flex: none; padding: 0 18px; height: 36px; }
+  .btn.danger { color: #fecaca; border-color: #5b2330; background: #241319; }
+  .btn svg { width: 15px; height: 15px; flex: none; }
+  .handle { position: fixed; top: 50%; left: 0; z-index: 3; transform: translateY(-50%); width: 22px;
+            height: 64px; border: 1px solid var(--line); border-left: 0; border-radius: 0 12px 12px 0;
+            background: rgba(20, 20, 28, .92); color: var(--muted); display: grid; place-items: center; }
+  .handle:hover { color: var(--text); width: 26px; }
+  .handle svg { width: 14px; height: 14px; }
+  .panel { position: fixed; top: 0; left: 0; bottom: 0; z-index: 4; width: 300px; display: flex;
+           flex-direction: column; background: rgba(16, 16, 23, .97); border-right: 1px solid var(--line);
+           box-shadow: 12px 0 40px rgba(0, 0, 0, .5); transform: translateX(-102%); transition: transform .2s ease; }
+  .panel.open { transform: none; }
+  .head { display: flex; align-items: center; gap: 10px; padding: 16px 12px 14px 18px; border-bottom: 1px solid #262633; }
+  .mark { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; flex: none;
+          background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .mark svg { width: 17px; height: 17px; color: #fff; }
+  .name { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sub { color: var(--muted); font-size: 12px; }
+  .close { margin-left: auto; width: 32px; height: 32px; border: 0; border-radius: 8px; background: none; color: var(--muted); }
+  .close:hover { background: var(--card-2); color: var(--text); }
+  .body { flex: 1; overflow-y: auto; padding: 4px 18px 18px; }
+  .section { padding: 14px 0; border-bottom: 1px solid #262633; }
+  .section:last-child { border-bottom: 0; }
+  h3 { margin: 0 0 10px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  textarea { width: 100%; height: 96px; resize: vertical; padding: 10px; border-radius: 10px; border: 1px solid var(--line);
+             background: var(--card); color: var(--text); font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  .hint { color: var(--faint); font-size: 12px; margin-top: 6px; }
+  .seg { display: flex; padding: 3px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); }
+  .seg button { flex: 1; height: 28px; border: 0; border-radius: 7px; background: none; color: var(--muted); font-size: 12.5px; font-weight: 600; }
+  .seg button.on { background: var(--card-2); color: var(--text); }
+  .switch { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; font-size: 13px; }
+  .switch input { width: 36px; height: 20px; appearance: none; border-radius: 20px; background: #2a2a38; position: relative; cursor: pointer; margin: 0; }
+  .switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #cfcfdb; transition: transform .15s; }
+  .switch input:checked { background: var(--accent); }
+  .switch input:checked::after { transform: translateX(16px); background: #fff; }
+  .toast { position: fixed; left: 50%; bottom: 24px; z-index: 6; transform: translateX(-50%); padding: 9px 15px;
+           border-radius: 10px; background: var(--card-2); border: 1px solid var(--line); font-size: 13px; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-monitor" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="19" height="13" rx="2"/><path d="M8 20.5h8M12 16.5v4"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></symbol>
+  <symbol id="i-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></symbol>
+  <symbol id="i-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3v8M6.4 6.6a8 8 0 1 0 11.2 0"/></symbol>
+</svg>
+
+<div id="screen"></div>
+<div class="stage" id="stage"><div><div class="spinner"></div><h2 id="stage-title">Connecting</h2>
+  <p id="stage-text">Opening your desktop…</p><div class="actions" id="stage-actions" hidden></div></div></div>
+<button class="handle" id="handle" title="Workspace controls"><svg><use href="#i-chevron"/></svg></button>
+<aside class="panel" id="panel">
+  <div class="head">
+    <span class="mark"><svg><use href="#i-monitor"/></svg></span>
+    <div style="min-width:0"><div class="name" id="name">Workspace</div><div class="sub" id="state">Connecting…</div></div>
+    <button class="close" id="close" title="Hide controls"><svg width="14" height="14" style="transform:scaleX(-1)"><use href="#i-chevron"/></svg></button>
+  </div>
+  <div class="body">
+    <div class="section"><div class="row">
+      <button class="btn" id="back"><svg><use href="#i-back"/></svg>Workspaces</button>
+      <button class="btn" id="fullscreen"><svg><use href="#i-full"/></svg>Fullscreen</button>
+    </div></div>
+    <div class="section">
+      <h3>Clipboard</h3>
+      <textarea id="clip" placeholder="Text copied in the desktop shows up here. Type or paste here, then send it to the desktop."></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn" id="clip-send">Send to desktop</button><button class="btn" id="clip-copy">Copy</button></div>
+      <div class="hint" id="clip-hint">Then paste inside the desktop with Ctrl+V.</div>
+    </div>
+    <div class="section">
+      <h3>Keys</h3>
+      <div class="row"><button class="btn" data-key="ctrlaltdel">Ctrl+Alt+Del</button>
+        <button class="btn" data-keysym="65307" data-code="Escape">Esc</button>
+        <button class="btn" data-keysym="65515" data-code="MetaLeft">Super</button></div>
+    </div>
+    <div class="section">
+      <h3>Picture</h3>
+      <div class="seg" id="quality"><button data-level="2">Fast</button><button data-level="6" class="on">Balanced</button><button data-level="9">Sharp</button></div>
+      <label class="switch">View only<input type="checkbox" id="viewonly"></label>
+    </div>
+    <div class="section">
+      <h3>Session</h3>
+      <div class="row"><button class="btn" id="suspend"><svg><use href="#i-moon"/></svg>Suspend</button>
+        <button class="btn danger" id="stop"><svg><use href="#i-power"/></svg>Shut down</button></div>
+      <div class="hint">Suspend keeps your open windows for next time. Shut down logs you out; files are kept either way.</div>
+    </div>
+  </div>
+</aside>
+<div class="toast" id="toast" hidden></div>
+
+<script type="module">
+import RFB from "./core/rfb.js";
+
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.hash.slice(1));
+const password = params.get("password") || "";
+const portal = params.get("portal") || "";
+const workspace = params.get("workspace") || "";
+const name = params.get("name") || "Workspace";
+history.replaceState(null, "", location.pathname);  // keep the password out of history
+document.title = `${name} · Workspaces`;
+$("name").textContent = name;
+let rfb = null, retry = null, refused = false, connectedOnce = false, toastTimer = null, failures = 0;
+
+function toast(text) {
+  $("toast").textContent = text;
+  $("toast").hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $("toast").hidden = true; }, 3500);
+}
+function stage(title, text, actions) {
+  $("stage-title").textContent = title;
+  $("stage-text").textContent = text;
+  $("stage").querySelector(".spinner").hidden = Boolean(actions);
+  $("stage-actions").hidden = !actions;
+  $("stage-actions").innerHTML = actions || "";
+  $("stage").hidden = false;
+}
+const toPortal = action => {
+  if (!portal) return toast("Open this workspace from the portal to use this button");
+  location.href = `${portal}#${action ? `/w/${encodeURIComponent(workspace)}/${action}` : ""}`;
+};
+
+function connect() {
+  clearTimeout(retry);
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  rfb = new RFB($("screen"), `${scheme}://${location.host}/websockify`, {credentials: {password}, shared: true});
+  rfb.resizeSession = true;   // the desktop follows the window
+  rfb.scaleViewport = false;
+  rfb.clipViewport = false;
+  rfb.focusOnClick = true;
+  rfb.background = "#0b0b10";
+  rfb.qualityLevel = Number($("quality").querySelector(".on").dataset.level);
+  rfb.compressionLevel = 2;
+  rfb.viewOnly = $("viewonly").checked;
+  rfb.addEventListener("connect", () => {
+    connectedOnce = true;
+    failures = 0;
+    $("stage").hidden = true;
+    $("state").textContent = "Connected";
+    rfb.focus();
+  });
+  rfb.addEventListener("securityfailure", () => {
+    refused = true;
+    stage("This link has expired", "The workspace was restarted with a new password. Open it again from the portal.",
+          `<button class="btn primary" data-go="open">Open again</button>`);
+  });
+  rfb.addEventListener("disconnect", () => {
+    $("state").textContent = "Reconnecting…";
+    if (refused) return;
+    failures += 1;
+    if (failures > 4) {
+      // The microVM is gone: suspended, shut down, or moved by the portal.
+      return stage("Your desktop is not running here", "It was suspended or shut down. The portal can start it again.",
+                   `<button class="btn primary" data-go="open">Back to the portal</button>`);
+    }
+    if (connectedOnce) stage("Reconnecting", "The connection to your desktop dropped; trying again…");
+    retry = setTimeout(connect, 1500);
+  });
+  rfb.addEventListener("clipboard", event => {
+    $("clip").value = event.detail.text;
+    $("clip-hint").textContent = "Copied in the desktop. Use Copy to take it to your computer.";
+  });
+}
+
+const togglePanel = open => { $("panel").classList.toggle("open", open); if (!open) rfb?.focus(); };
+$("handle").onclick = () => togglePanel(true);
+$("close").onclick = () => togglePanel(false);
+$("back").onclick = () => toPortal("");
+$("stage").addEventListener("click", event => {
+  if (event.target.closest("[data-go]")) toPortal("open");
+});
+$("fullscreen").onclick = () => {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen().catch(error => toast(error.message));
+  togglePanel(false);
+};
+$("clip-send").onclick = () => {
+  rfb?.clipboardPasteFrom($("clip").value);
+  $("clip-hint").textContent = "Sent. Paste inside the desktop with Ctrl+V.";
+};
+$("clip-copy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("clip").value); }
+  catch { $("clip").select(); document.execCommand("copy"); }
+  toast("Copied to your clipboard");
+};
+document.querySelectorAll("[data-key],[data-keysym]").forEach(button => {
+  button.onclick = () => {
+    if (button.dataset.key === "ctrlaltdel") rfb?.sendCtrlAltDel();
+    else rfb?.sendKey(Number(button.dataset.keysym), button.dataset.code);
+    togglePanel(false);
+  };
+});
+$("quality").addEventListener("click", event => {
+  const button = event.target.closest("button");
+  if (!button) return;
+  $("quality").querySelectorAll("button").forEach(other => other.classList.toggle("on", other === button));
+  if (rfb) rfb.qualityLevel = Number(button.dataset.level);
+});
+$("viewonly").onchange = () => { if (rfb) rfb.viewOnly = $("viewonly").checked; };
+$("suspend").onclick = () => toPortal("suspend");
+$("stop").onclick = () => {
+  if (confirm(`Shut down ${name}? Open windows close; files are kept.`)) toPortal("stop");
+};
+
+connect();
+</script>
+</body>
+</html>
