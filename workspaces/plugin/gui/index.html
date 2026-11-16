@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workspaces</title>
+<style>
+  :root { --base: #080808; --surface: #111; --surface-2: #181818; --line: #303030; --muted: #969696;
+          --accent: #d946ef; --text: #ededed; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 6px 8px; background: var(--base); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  .muted { color: var(--muted); font-size: 13px; }
+  label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+  input, select { background: var(--surface-2); color: var(--text); border: 1px solid #3b3b3b;
+         border-radius: 5px; padding: 7px 8px; font: inherit; min-width: 0; width: 100%; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 5px; padding: 8px 14px;
+           font: inherit; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid #4b4b4b; }
+  button.small { padding: 3px 10px; font-size: 12px; font-weight: 500; }
+  button.danger { color: #fca5a5; border-color: #7f1d1d; }
+  button:disabled { opacity: .5; cursor: progress; }
+  a { color: #f0abfc; }
+  a.button { display: inline-block; background: var(--accent); color: #fff; border-radius: 5px;
+             padding: 3px 10px; font-size: 12px; font-weight: 600; text-decoration: none; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #292929; white-space: nowrap; }
+  th { background: #191919; color: #aaa; font-weight: 500; font-size: 13px; }
+  tbody tr:hover { background: #1c1c1c; }
+  #desktop-rows tr { cursor: pointer; }
+  td.actions { display: flex; gap: 6px; align-items: center; }
+  .pill { border: 1px solid #4b4b4b; border-radius: 999px; padding: 2px 9px; font-size: 12px; }
+  .running, .ready { color: #6ee7b7; border-color: #166534; background: #052e1b; }
+  .stopped { color: #aaa; }
+  .suspended { color: #93c5fd; border-color: #1e3a8a; background: #0b1530; }
+  .queued, .moving, .starting, .stopping, .suspending, .syncing { color: #fcd34d; border-color: #854d0e; background: #422006; }
+  .failed { color: #fca5a5; border-color: #991b1b; background: #2a0a0a; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .status { min-height: 20px; margin-top: 6px; white-space: pre-wrap; }
+  .error { color: #fca5a5; }
+  .scroll { overflow-x: auto; }
+  .head { display: flex; align-items: center; gap: 8px; margin: 4px 0 8px; }
+  .space { flex: 1; }
+  .tabs { display: flex; gap: 4px; margin: 2px 0 8px; border-bottom: 1px solid var(--line); }
+  .tab { background: transparent; color: var(--muted); border: 0; border-bottom: 2px solid transparent;
+         border-radius: 0; padding: 8px 12px; font-weight: 500; }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  dialog { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+           width: min(640px, 96vw); padding: 0; }
+  dialog::backdrop { background: rgba(0, 0, 0, .6); }
+  .dialog-head { display: flex; align-items: center; gap: 8px; padding: 16px 20px 0; }
+  .dialog-body { padding: 8px 20px 8px; }
+  .dialog-foot { display: flex; align-items: center; gap: 8px; padding: 14px 20px;
+                 border-top: 1px solid var(--line); background: #0d0d0d; }
+  .fields { display: grid; gap: 12px; margin-top: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fields .full { grid-column: 1 / -1; }
+  @media (max-width: 640px) { .fields { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="tabs">
+  <button class="tab" data-tab="workspaces">Workspaces</button>
+  <button class="tab" data-tab="desktops">Desktops</button>
+</div>
+
+<section id="tab-workspaces">
+  <div class="head"><h2>Workspaces</h2><span class="space"></span>
+    <button id="new-workspace">New workspace</button></div>
+  <div class="muted" style="margin-bottom:8px">Each workspace keeps its home folder and installed software on its own
+    volume. Suspend saves the running desktop with its open windows; start resumes it. When the workspace's node is
+    full, it moves to a node with room before it starts.</div>
+  <div class="status muted" id="workspaces-notice"></div>
+  <div class="scroll"><table>
+    <thead><tr><th>Name</th><th>Desktop</th><th>Status</th><th>Node</th><th>Disk</th><th>Started</th><th></th></tr></thead>
+    <tbody id="workspace-rows"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody>
+  </table></div>
+</section>
+
+<section id="tab-desktops" hidden>
+  <div class="head"><h2>Desktops</h2><span class="space"></span>
+    <button id="new-desktop">Add desktop</button></div>
+  <div class="muted" style="margin-bottom:8px">The image a workspace runs (XFCE with TigerVNC and noVNC, see the plugin's
+    README) and the size of its VM. Images are imported on the Scraperack Images page. Changing the image or size
+    makes suspended workspaces of this desktop start fresh next time; their files are kept.</div>
+  <div class="status muted" id="desktops-notice"></div>
+  <div class="scroll"><table>
+    <thead><tr><th>Name</th><th>Image</th><th>Distributed</th><th>CPU</th><th>Memory MiB</th><th>Default disk</th></tr></thead>
+    <tbody id="desktop-rows"><tr><td colspan="6" class="muted">Loading…</td></tr></tbody>
+  </table></div>
+</section>
+
+<dialog id="workspace-dialog">
+  <form id="workspace-form">
+    <div class="dialog-head"><h2>New workspace</h2></div>
+    <div class="dialog-body">
+      <div class="fields">
+        <label>Name<input name="name" required placeholder="my-desktop"></label>
+        <label>Desktop<select name="desktop" required></select></label>
+        <label>Disk GiB<input name="disk_gib" type="number" min="1" max="4096" value="10"></label>
+        <label>Timezone<input name="timezone" value="UTC"></label>
+      </div>
+      <div class="status muted" id="workspace-status"></div>
+    </div>
+    <div class="dialog-foot"><span class="space"></span>
+      <button type="button" class="secondary" data-close>Cancel</button>
+      <button type="submit">Create and start</button></div>
+  </form>
+</dialog>
+
+<dialog id="desktop-dialog">
+  <form id="desktop-form">
+    <div class="dialog-head"><h2 id="desktop-title">Add desktop</h2></div>
+    <div class="dialog-body">
+      <div class="fields">
+        <label>Name<input name="desktop_name" required placeholder="xfce"></label>
+        <label>Image<select name="image" required></select></label>
+        <label>CPU cores<input name="cpu" type="number" min="0.5" step="0.5" value="2"></label>
+        <label>Memory MiB<input name="memory_mib" type="number" min="512" step="256" value="2048"></label>
+        <label>Default disk GiB<input name="disk_gib" type="number" min="1" value="10"></label>
+      </div>
+      <div class="status muted" id="desktop-status"></div>
+    </div>
+    <div class="dialog-foot">
+      <button type="button" class="secondary danger" id="delete-desktop" hidden>Delete</button>
+      <span class="space"></span>
+      <button type="button" class="secondary" data-close>Cancel</button>
+      <button type="submit" id="save-desktop">Add</button></div>
+  </form>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const escape = value => String(value ?? "").replace(/[&<>"']/g, c =>
+  ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const pill = status => `<span class="pill ${escape(status)}">${escape(status)}</span>`;
+const when = ms => ms ? new Date(ms).toLocaleString() : "—";
+let desktops = [], coreImages = {}, workspaces = [], editing = null, tab = "workspaces";
+
+async function api(method, path, body) {
+  const response = await fetch(`api/${path}`, {method, headers: {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) throw new Error(data?.error || response.statusText);
+  return data;
+}
+function note(id, text, error = false) { $(id).textContent = text; $(id).className = `status ${error ? "error" : "muted"}`; }
+async function busy(form, statusId, message, action) {
+  const buttons = form.querySelectorAll("button");
+  buttons.forEach(b => b.disabled = true);
+  note(statusId, message);
+  try { await action(); } catch (error) { note(statusId, error.message, true); }
+  finally { buttons.forEach(b => b.disabled = false); }
+}
+
+// --- Workspaces -------------------------------------------------------------------------
+function detail(w) {
+  if (w.status === "moving" && w.migration) return "copying its files to another node";
+  if (w.status === "stopped" && w.error) return w.error;
+  if (w.status === "stopped" && w.last_reason) return w.last_reason.replace("_", " ");
+  if (w.migration_error && ["queued", "starting"].includes(w.status)) return `move failed: ${w.migration_error}`;
+  return "";
+}
+function actions(w) {
+  const button = (action, label, extra = "") =>
+    `<button class="secondary small ${extra}" data-action="${action}" data-id="${escape(w.id)}">${label}</button>`;
+  const parts = [];
+  if (w.url) parts.push(`<a class="button" href="${escape(w.url)}" target="_blank" rel="noopener">Open</a>`);
+  if (["stopped", "suspended"].includes(w.status)) parts.push(button("start", w.status === "suspended" ? "Resume" : "Start"));
+  if (["starting", "running"].includes(w.status)) parts.push(button("suspend", "Suspend"));
+  if (["queued", "moving", "starting", "running"].includes(w.status)) parts.push(button("stop", "Stop"));
+  if (["stopped", "suspended"].includes(w.status)) parts.push(button("delete", "Delete", "danger"));
+  return parts.join("");
+}
+async function refreshWorkspaces() {
+  try { workspaces = await api("GET", "workspaces"); }
+  catch (error) { $("workspace-rows").innerHTML = `<tr><td colspan="7" class="error">${escape(error.message)}</td></tr>`; return; }
+  $("workspace-rows").innerHTML = workspaces.length ? workspaces.map(w => {
+    const info = detail(w);
+    const node = w.node_name || w.volume_node_name || "—";
+    return `<tr>
+      <td>${escape(w.name)}</td><td>${escape(w.desktop_name)}</td>
+      <td title="${escape(w.error || "")}">${pill(w.status)}${info ? ` <span class="muted">${escape(info)}</span>` : ""}</td>
+      <td>${escape(node)}</td><td>${w.disk_gib} GiB</td>
+      <td>${["running", "starting"].includes(w.status) ? when(w.started_at_ms) : "—"}</td>
+      <td class="actions">${actions(w)}</td></tr>`;
+  }).join("") : `<tr><td colspan="7" class="muted">No workspaces yet</td></tr>`;
+}
+$("workspace-rows").addEventListener("click", async event => {
+  const {action, id} = event.target.dataset || {};
+  if (!action) return;
+  const workspace = workspaces.find(w => w.id === id);
+  if (action === "delete" && !confirm(`Delete ${workspace.name} and all its files?`)) return;
+  event.target.disabled = true;
+  try {
+    if (action === "delete") await api("DELETE", `workspaces/${encodeURIComponent(id)}`);
+    else await api("POST", `workspaces/${encodeURIComponent(id)}/${action}`);
+    note("workspaces-notice", "");
+  } catch (error) { note("workspaces-notice", error.message, true); }
+  refreshWorkspaces();
+});
+$("new-workspace").onclick = () => {
+  const form = $("workspace-form");
+  form.desktop.innerHTML = desktops.map(d => `<option value="${escape(d.id)}">${escape(d.name)}</option>`).join("");
+  const first = desktops[0];
+  if (first) form.disk_gib.value = first.disk_gib;
+  form.timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  note("workspace-status", desktops.length ? "" : "Add a desktop first", !desktops.length);
+  $("workspace-dialog").showModal();
+};
+$("workspace-form").desktop.onchange = event => {
+  const desktop = desktops.find(d => d.id === event.target.value);
+  if (desktop) $("workspace-form").disk_gib.value = desktop.disk_gib;
+};
+$("workspace-form").addEventListener("submit", event => {
+  event.preventDefault();
+  const form = event.target;
+  const body = {name: form.name.value.trim(), desktop: form.desktop.value,
+    disk_gib: Number(form.disk_gib.value), timezone: form.timezone.value.trim() || "UTC"};
+  busy(form, "workspace-status", "Creating…", async () => {
+    const workspace = await api("POST", "workspaces", body);
+    $("workspace-dialog").close();
+    note("workspaces-notice", `${workspace.name} is ${workspace.status}`);
+    refreshWorkspaces();
+  });
+});
+
+// --- Desktops ---------------------------------------------------------------------------
+async function refreshDesktops() {
+  try { desktops = await api("GET", "desktops"); }
+  catch (error) { $("desktop-rows").innerHTML = `<tr><td colspan="6" class="error">${escape(error.message)}</td></tr>`; return; }
+  $("desktop-rows").innerHTML = desktops.length ? desktops.map(d => `
+    <tr data-id="${escape(d.id)}"><td>${escape(d.name)}</td>
+      <td>${escape(coreImages[d.image]?.name || d.image.slice(0, 8))}</td>
+      <td>${pill(d.ready ? "ready" : "syncing")}</td><td>${d.cpu_millis / 1000}</td><td>${d.memory_mib}</td>
+      <td>${d.disk_gib} GiB</td></tr>`).join("")
+    : `<tr><td colspan="6" class="muted">No desktops yet</td></tr>`;
+}
+async function editDesktop(desktop) {
+  editing = desktop;
+  const form = $("desktop-form");
+  const list = await api("GET", "images");
+  coreImages = Object.fromEntries(list.map(i => [i.id, i]));
+  form.image.innerHTML = list.filter(i => i.ready || i.id === desktop?.image)
+    .map(i => `<option value="${escape(i.id)}">${escape(i.name)}</option>`).join("");
+  const value = desktop || {name: "", cpu_millis: 2000, memory_mib: 2048, disk_gib: 10};
+  form.desktop_name.value = value.name;
+  if (desktop) form.image.value = desktop.image;
+  form.cpu.value = value.cpu_millis / 1000;
+  form.memory_mib.value = value.memory_mib;
+  form.disk_gib.value = value.disk_gib;
+  $("desktop-title").textContent = desktop ? `Edit ${desktop.name}` : "Add desktop";
+  $("save-desktop").textContent = desktop ? "Save" : "Add";
+  $("delete-desktop").hidden = !desktop;
+  note("desktop-status", "");
+  $("desktop-dialog").showModal();
+}
+$("new-desktop").onclick = () => editDesktop(null).catch(error => note("desktops-notice", error.message, true));
+$("desktop-rows").addEventListener("click", event => {
+  const row = event.target.closest("tr[data-id]");
+  if (row) editDesktop(desktops.find(d => d.id === row.dataset.id)).catch(error => note("desktops-notice", error.message, true));
+});
+$("desktop-form").addEventListener("submit", event => {
+  event.preventDefault();
+  const form = event.target;
+  const body = {name: form.desktop_name.value.trim(), image: form.image.value,
+    cpu_millis: Math.round(Number(form.cpu.value) * 1000), memory_mib: Number(form.memory_mib.value),
+    disk_gib: Number(form.disk_gib.value)};
+  busy(form, "desktop-status", "Saving…", async () => {
+    if (editing) await api("PUT", `desktops/${encodeURIComponent(editing.id)}`, body);
+    else await api("POST", "desktops", body);
+    $("desktop-dialog").close();
+    refreshDesktops();
+  });
+});
+$("delete-desktop").onclick = () => {
+  if (!confirm(`Delete desktop ${editing.name}?`)) return;
+  busy($("desktop-form"), "desktop-status", "Deleting…", async () => {
+    await api("DELETE", `desktops/${encodeURIComponent(editing.id)}`);
+    $("desktop-dialog").close();
+    refreshDesktops();
+  });
+};
+
+// --- Tabs ---------------------------------------------------------------------------------
+for (const dialog of document.querySelectorAll("dialog"))
+  dialog.querySelector("[data-close]").onclick = () => dialog.close();
+function show(name) {
+  tab = name === "desktops" ? "desktops" : "workspaces";
+  for (const button of document.querySelectorAll(".tab")) button.classList.toggle("active", button.dataset.tab === tab);
+  $("tab-workspaces").hidden = tab !== "workspaces";
+  $("tab-desktops").hidden = tab !== "desktops";
+  history.replaceState(null, "", `#${tab}`);
+}
+for (const button of document.querySelectorAll(".tab")) button.onclick = () => show(button.dataset.tab);
+async function tick() {
+  await refreshDesktops();
+  if (tab === "workspaces") await refreshWorkspaces();
+}
+show(location.hash.slice(1));
+api("GET", "images").then(list => { coreImages = Object.fromEntries(list.map(i => [i.id, i])); })
+  .catch(() => {}).finally(tick);
+setInterval(tick, 3000);
+</script>
+</body>
+</html>

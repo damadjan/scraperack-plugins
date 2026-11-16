@@ -6,6 +6,7 @@
 | [Writing a plugin](writing-plugins.md) | Manifest, process contract, core API, guest disks, executors |
 | [Python plugin](python-plugin.md) | Environments, executions, the plugin page and API |
 | [Python SDK](python-sdk.md) | `scraperack-python`: running functions from your code |
+| [Workspaces plugin](workspaces-plugin.md) | Long-lived desktops: setup, how volumes, suspend and moves work, the API |
 
 The core itself (installation, pools, tasks, API) is documented in
 [scraperack/docs](https://github.com/damadjan/scraperack/tree/main/docs).
