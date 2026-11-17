@@ -11,13 +11,16 @@ support and anonymity in microVMs, and serves the working ones through an API.
 
 Standard library only: the plugin installs without downloading anything.
 """
+import base64
 import http.client
+import io
 import json
 import os
 import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -41,8 +44,9 @@ HERE = Path(__file__).resolve().parent
 
 VENV_MOUNT = "/tmp/environment"
 GUEST_MOUNT = "/tmp/scraperack/proxies"
-PACKAGES = ["curl-cffi==0.17.0", "aiohttp==3.14.5", "aiohttp-socks==0.12.0"]
-SCRAPER_POOL, TESTER_POOL = "proxies-scraper", "proxies-tester"
+# cloudpickle: the Python executor baked into older images imports it with the package disk's Python.
+PACKAGES = ["curl-cffi==0.17.0", "aiohttp==3.14.5", "aiohttp-socks==0.12.0", "cloudpickle==3.1.2"]
+SCRAPER_POOL, TESTER_POOL, BUILDER_POOL = "proxies-scraper", "proxies-tester", "proxies-builder"
 FINISHED = {"succeeded", "failed", "timed_out"}
 RATE_RAMP_PER_MIN = 0.08
 LOOP_SECONDS = 5
@@ -94,6 +98,23 @@ def core(method, path, body=None, file=None, timeout=120):
     return json.loads(data) if data else None
 
 
+def guest_source(module, entry):
+    """A `python-source` payload body: a guest module plus main(*params) calling its entry point.
+
+    Both this plugin's executor and the Python executor baked into older images (which run
+    their own executor whatever the pool says) run this format.
+    """
+    return (HERE / "guest" / f"{module}.py").read_text() + f"\n\ndef main(*params):\n    return {entry}(*params)\n"
+
+
+SOURCES = {"scrape": guest_source("scrape", "scrape_batch"), "test": guest_source("check", "test_batch"),
+           "build": guest_source("build", "build")}
+
+
+def call(pool, name, *params):
+    return run_task(pool, {"encoding": "python-source", "source": SOURCES[name], "params": list(params)})
+
+
 def run_task(pool, payload):
     """Submit a task, wait for it, and return its value. Retries submits the core refuses for a while."""
     delay = 1
@@ -111,7 +132,10 @@ def run_task(pool, payload):
     outcome = core("GET", f"/v1/tasks/{task['id']}/result")
     if outcome["status"] != "succeeded":
         raise RuntimeError((outcome.get("error") or f"task {outcome['status']}").strip().splitlines()[-1][:500])
-    return outcome["value"]
+    value = outcome["value"]
+    if not isinstance(value, dict) or value.get("encoding") != "json":
+        raise RuntimeError("the executor returned something other than JSON")
+    return value["data"]
 
 
 # --- Package disk and pools -------------------------------------------------------
@@ -132,26 +156,39 @@ def find_image(wanted):
 
 
 def package_disk(image):
-    """A disk with a virtualenv of PACKAGES built inside `image`; built once per image."""
+    """A disk with a virtualenv of PACKAGES, built once per image in a microVM of that image.
+
+    A short-lived `proxies-builder` pool runs the executor with the image's own Python, which
+    pip-installs PACKAGES into /tmp/environment and returns it packed; the controller turns it
+    into an ext4 disk mounted at the same path in the scraper and tester pools.
+    """
     key = sha256(json.dumps([image["sha256"], PACKAGES]).encode()).hexdigest()
     cached = json.loads(store.get_value("status_packages", "{}"))
     disks = {disk["key"] for disk in core("GET", "/v1/disks")}
     if cached.get("key") == key and cached.get("disk") in disks:
         return cached["disk"]
-    source = image.get("docker_source")
-    if not source:
-        raise RuntimeError("the image must be imported from Docker so packages can be installed")
-    store.log("info", f"Installing {', '.join(PACKAGES)} into a package disk for {image['name']}")
-    script = ("/usr/bin/python3 -m venv /tmp/environment && "
-              "/tmp/environment/bin/python -m pip install --no-cache-dir \"$@\"")
-    container = run("docker", "create", "--entrypoint", "/bin/sh", source, "-c", script, "--",
-                    *PACKAGES).strip()
+    if not GUEST_DISK:
+        raise RuntimeError("the plugin's guest disk is missing; reinstall the plugin")
+    store.log("info", f"Installing {', '.join(PACKAGES)} for {image['name']} in a builder microVM")
+    apply_pool({"name": BUILDER_POOL, "image": image["id"], "cpu_millis": 1000, "memory_mib": 1024,
+                "disk_mib": 1024, "warm_instances": 0, "max_instances": 1, "timeout_secs": 900,
+                "idle_timeout_secs": 5, "reuse": False, "network": True, "ports": [], "preload": [],
+                "disks": [{"key": GUEST_DISK, "mount": GUEST_MOUNT}],
+                "executor": ["/usr/bin/python3", f"{GUEST_MOUNT}/executor.py"],
+                "aliases": [BUILDER_POOL], "display_name": "Proxy package builder"})
+    try:
+        built = call(BUILDER_POOL, "build", PACKAGES)
+    finally:
+        try:
+            core("DELETE", f"/v1/pools/{BUILDER_POOL}")
+        except (OSError, ApiError):
+            pass
     work = Path(tempfile.mkdtemp(prefix="proxies-plugin-", dir=DATA))
     try:
-        run("docker", "start", "-a", container)
         root = work / "root"
         root.mkdir()
-        run("docker", "cp", f"{container}:/tmp/environment/.", str(root))
+        with tarfile.open(fileobj=io.BytesIO(base64.b64decode(built["archive"])), mode="r:gz") as archive:
+            archive.extractall(root, filter="tar")   # bin/python links to the image's /usr/bin/python3
         used = int(run("du", "-sb", str(root)).split()[0])
         step = 16 * 1024 * 1024
         size = -(-max(used + used // 5 + 8 * 1024 * 1024, 32 * 1024 * 1024) // step) * step
@@ -162,8 +199,8 @@ def package_disk(image):
         with disk.open("rb") as file:
             stored = core("POST", "/v1/disks", file=file, timeout=None)
     finally:
-        subprocess.run(["docker", "rm", "-f", container], capture_output=True)
         shutil.rmtree(work, ignore_errors=True)
+    store.log("info", f"Package disk ready ({used // 1048576} MB, Python {built.get('python', '?')})")
     if cached.get("disk") and cached["disk"] != stored["key"]:
         try:
             core("DELETE", f"/v1/disks/{cached['disk']}")
@@ -273,7 +310,7 @@ class Scheduler:
 
         def batch(urls):
             try:
-                results = run_task(SCRAPER_POOL, {"op": "scrape", "urls": urls, "timeout": cfg["scrape_timeout_s"]})
+                results = call(SCRAPER_POOL, "scrape", urls, cfg["scrape_timeout_s"])
                 failed = False
             except Exception as error:
                 failed = True
@@ -335,9 +372,8 @@ class Scheduler:
             rate_used = self.rate
             batch_started = time.monotonic()
             try:
-                response = run_task(TESTER_POOL, {
-                    "op": "test", "items": chunk, "judges": judges, "https_url": cfg["https_test_url"],
-                    "timeout": cfg["test_timeout_s"], "concurrency": cfg["test_concurrency"], "rate": per_vm})
+                response = call(TESTER_POOL, "test", chunk, judges, cfg["https_test_url"], cfg["test_timeout_s"],
+                                cfg["test_concurrency"], per_vm)
             except Exception as error:
                 with guard:
                     totals["batch_failures"] += 1
@@ -595,8 +631,7 @@ def admin_route(method, parts, body, query):
         if method == "PUT":
             return 200, {"saved": store.save_settings(body)}
     if parts == ["images"] and method == "GET":
-        return 200, [{"id": i["id"], "name": i["name"], "ready": i.get("ready"),
-                      "docker": bool(i.get("docker_source"))} for i in core("GET", "/v1/images")]
+        return 200, [{"id": i["id"], "name": i["name"], "ready": i.get("ready")} for i in core("GET", "/v1/images")]
     if parts == ["keys"]:
         if method == "GET":
             return 200, {"keys": store.list_keys(), "auth_required": store.get_settings()["api_auth_required"]}

@@ -22,10 +22,11 @@ programs through an API.
    ship with the plugin.
 4. On **API keys**, create a key for your programs.
 
-On first start the plugin builds a package disk (curl-cffi, aiohttp, aiohttp-socks) inside
-the image chosen in **Settings** (default `python-generic-v2`; any image with
-`/usr/bin/python3`, imported from Docker) and creates two pools, `proxies-scraper` and
-`proxies-tester`. The dashboard's top right shows when they are ready.
+On first start the plugin builds a package disk (curl-cffi, aiohttp, aiohttp-socks) for the
+image chosen in **Settings** (default `python-generic-v2`; any image with `/usr/bin/python3`
+and its `venv` module): a short-lived `proxies-builder` microVM pip-installs them into a
+virtualenv and the controller turns it into a disk. Then it creates two pools,
+`proxies-scraper` and `proxies-tester`. The dashboard's top right shows when they are ready.
 
 ## The plugin's page
 

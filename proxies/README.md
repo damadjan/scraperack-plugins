@@ -12,7 +12,6 @@ tar -czf proxies-plugin.tar.gz -C plugin .
 Install the archive from **Plugins → Install plugin**, click **Open Proxies** on the plugin's
 entry, add proxy lists on **Sources**, and create a key on **API keys**.
 
-Needs an image with Python 3 imported from Docker (`python-generic-v2` by default) and Docker
-on the controller to build the package disk.
+Needs an image with `/usr/bin/python3` and its `venv` module (`python-generic-v2` by default).
 
 See [docs/proxies-plugin.md](../docs/proxies-plugin.md).

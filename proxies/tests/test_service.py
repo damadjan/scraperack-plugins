@@ -18,7 +18,7 @@ class FakeCore:
         self.pools, self.tasks, self.calls = {}, {}, []
         self.images = [{"id": "img1", "name": "python-generic-v2", "sha256": "abc", "docker_source": "sha256:abc"}]
         self.disks = [{"key": "disk1"}]
-        self.reply = lambda payload: {"ok": True}
+        self.reply = lambda kind, params: {"ok": True}
 
     def __call__(self, method, path, body=None, file=None, timeout=120):
         self.calls.append((method, path, body))
@@ -41,7 +41,11 @@ class FakeCore:
             task["status"] = "succeeded"
             return task
         if parts[2] == "result":
-            return {"status": "succeeded", "value": self.reply(task["payload"]), "error": None}
+            payload = task["payload"]
+            assert payload["encoding"] == "python-source" and "def main(*params)" in payload["source"]
+            kind = "scrape" if "def scrape_batch" in payload["source"] else "test"
+            return {"status": "succeeded", "value": {"encoding": "json", "data": self.reply(kind, payload["params"])},
+                    "error": None}
         raise AssertionError(path)
 
 
@@ -79,12 +83,12 @@ class ServiceTest(unittest.TestCase):
 
     def test_scrape_and_test_rounds(self):
         store.add_sources(["https://a.example/list"])
-        self.core.reply = lambda payload: (
+        self.core.reply = lambda kind, params: (
             [{"url": u, "ok": True, "status": 200, "ms": 3, "proxies": [["8.8.8.8", 3128, "http"], ["8.8.4.4", 1080, None]]}
-             for u in payload["urls"]] if payload["op"] == "scrape" else
+             for u in params[0]] if kind == "scrape" else
             {"real_ip": "1.1.1.1", "results": [{"id": i[0], "ip": i[1], "ok": i[2] == 3128, "protocol": "http",
                                                "https": False, "anonymity": "elite", "latency_ms": 50, "exit_ip": i[1]}
-                                              for i in payload["items"]]})
+                                              for i in params[0]]})
         cfg = store.get_settings()
         service.scheduler.scrape_round(cfg)
         self.assertEqual(store.stats()["proxies"]["new"], 2)
@@ -98,7 +102,7 @@ class ServiceTest(unittest.TestCase):
         source = store.enabled_sources()[0]["id"]
         store.store_scrape_result(source, {"ok": True, "proxies": [["8.8.8.8", 3128, None]]})
         store.refresh_source_stats(store.get_settings())
-        self.core.reply = lambda payload: {"real_ip": None, "results": [], "inconclusive": "canary failed"}
+        self.core.reply = lambda kind, params: {"real_ip": None, "results": [], "inconclusive": "canary failed"}
         service.scheduler.test_round(store.get_settings())
         self.assertEqual(store.stats()["proxies"]["new"], 1)
         self.assertGreater(store.get_settings()["test_rate_ceiling"], 0)
@@ -129,16 +133,22 @@ class ServiceTest(unittest.TestCase):
 
 
 class ExecutorTest(unittest.TestCase):
-    def test_dispatch(self):
-        reply = executor.handle({"encoding": "scraperack-describe"})
-        self.assertEqual(reply["error"], None)
-        self.assertIn("unknown op", executor.handle({"op": "nope"})["error"])
+    def test_python_source(self):
+        for source in service.SOURCES.values():   # each defines main() and imports only the stdlib at load
+            namespace = {}
+            exec(compile(source, "<test>", "exec"), namespace)
+            self.assertTrue(callable(namespace["main"]))
+        source = "def main(a, b):\n    return a + b\n"
+        reply = executor.handle({"encoding": "python-source", "source": source, "params": [2, 3]})
+        self.assertEqual(reply["result"]["value"], {"encoding": "json", "data": 5})
+        self.assertIn("unknown payload encoding", executor.handle({"encoding": "nope"})["error"])
         self.assertEqual(executor.handle({"encoding": "scraperack-preload", "modules": ["json"]})["result"]["value"],
-                         ["json"])
+                         {"encoding": "json", "data": ["json"]})
 
     def test_extract_formats(self):
+        import scrape
         text = "socks5://9.9.9.9:1080\n<td>8.8.8.8</td><td>3128</td>\n1.2.3.4:80 10.0.0.1:80"
-        found = executor.scrape.extract_proxies(text, "https://x.example/http.txt")
+        found = scrape.extract_proxies(text, "https://x.example/http.txt")
         self.assertEqual(found, [["1.2.3.4", 80, "http"], ["8.8.8.8", 3128, "http"], ["9.9.9.9", 1080, "socks5"]])
 
 

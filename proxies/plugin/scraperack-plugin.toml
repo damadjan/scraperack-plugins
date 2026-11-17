@@ -1,5 +1,5 @@
 name = "proxies"
-version = "0.1.0"
+version = "0.1.5"
 description = "Free public proxies collected from your sources, tested for protocol, speed, HTTPS support and anonymity in microVMs, and served through an API with keys. Data in SQLite on the controller."
 run = ["python3", "service.py"]
 gui = true

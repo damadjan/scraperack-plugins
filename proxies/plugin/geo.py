@@ -13,6 +13,7 @@ from datetime import date
 
 URL = 'https://download.db-ip.com/free/dbip-country-lite-{:%Y-%m}.mmdb.gz'
 MAX_AGE = 32 * 86400
+USER_AGENT = "Mozilla/5.0 (compatible; scraperack-proxies-plugin)"
 METADATA_MARKER = b'\xab\xcd\xefMaxMind.com'
 
 
@@ -141,7 +142,9 @@ class Geo:
             previous = date(today.year - (today.month == 1), (today.month - 2) % 12 + 1, 1)
             for month in (today, previous):
                 try:
-                    with urllib.request.urlopen(URL.format(month), timeout=120) as response:
+                    # db-ip.com refuses Python's default User-Agent.
+                    request = urllib.request.Request(URL.format(month), headers={"User-Agent": USER_AGENT})
+                    with urllib.request.urlopen(request, timeout=120) as response:
                         data = gzip.decompress(response.read())
                     Reader(data)   # refuse a broken download
                     tmp = self.path + '.tmp'

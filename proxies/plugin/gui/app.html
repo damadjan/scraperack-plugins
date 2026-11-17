@@ -643,7 +643,7 @@ async function loadSettings() {
       ${CLUSTER.map(([field, label]) => `<span>${label}</span>` + ["scraper", "tester"].map(role =>
         `<span class="cluster-cell">${control(meta[`${role}_${field}`])}</span>`).join("")).join("")}</div>
       <div class="muted" style="font-size:12.5px;margin-top:10px">Pools <span class="mono">proxies-scraper</span> and
-        <span class="mono">proxies-tester</span>. The image needs Python 3 and must be imported from Docker; packages are installed into a disk built from it.</div></div>`;
+        <span class="mono">proxies-tester</span>. The image needs <span class="mono">/usr/bin/python3</span>; the packages are installed in a builder microVM of that image, once per image.</div></div>`;
   for (const [key, value] of Object.entries(saved)) {
     const node = document.querySelector(`[data-setting="${key}"]`);
     if (!node) continue;
