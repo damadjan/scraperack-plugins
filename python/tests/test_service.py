@@ -226,5 +226,32 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(self.service.load_state()), 1)
 
 
+    def test_packages_are_built_in_a_builder_microvm(self):
+        calls, archive = [], base64.b64encode(b"packed venv").decode()
+
+        def core(method, path, body=None, file=None, timeout=120):
+            calls.append((method, path, body))
+            if path == "/v1/tasks":
+                return {"id": "t1", "status": "queued"}
+            if path == "/v1/tasks/t1/wait":
+                return {"id": "t1", "status": "succeeded"}
+            if path == "/v1/tasks/t1/result":
+                return {"status": "succeeded", "value": {"encoding": "json", "data": archive}}
+            return None
+
+        self.service.core = core
+        image = {"id": "img", "name": "python", "sha256": "abc"}
+        self.assertEqual(self.service.run_build(image, ["httpx==0.28.1"], "k" * 64), b"packed venv")
+        pool = calls[0][2]
+        self.assertEqual((calls[0][0], pool["name"], pool["reuse"]), ("POST", "python-build-kkkkkkkkkkkk", False))
+        self.assertEqual(pool["executor"], ["/usr/bin/python3", "/tmp/scraperack/python/executor.py"])
+        payload = calls[1][2]["payload"]
+        self.assertEqual((payload["encoding"], payload["params"]), ("python-source", [["cloudpickle", "httpx==0.28.1"]]))
+        namespace = {}
+        exec(compile(payload["source"], "<build>", "exec"), namespace)
+        self.assertTrue(callable(namespace["main"]))
+        self.assertEqual(calls[-1][:2], ("DELETE", "/v1/pools/python-build-kkkkkkkkkkkk"))
+
+
 if __name__ == "__main__":
     unittest.main()
