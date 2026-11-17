@@ -563,12 +563,23 @@ def finish(workspace, task):
                      password=None)
 
 
+def report(message=None):
+    """Log the current exception. Never raises: with a full disk even writing the log fails,
+    and an error escaping here would end the monitor for good."""
+    try:
+        if message:
+            print(message, file=sys.stderr)
+        traceback.print_exc()
+    except Exception:
+        pass
+
+
 def monitor():
     while True:
         try:
             monitor_once()
         except Exception:
-            traceback.print_exc()
+            report()
         time.sleep(MONITOR_INTERVAL)
 
 
@@ -578,7 +589,7 @@ def reconcile():
         try:
             core("GET", "/v1/pools")
             break
-        except OSError:
+        except Exception:
             time.sleep(1)
     with lock:
         templates = list(load(TEMPLATES).values())
@@ -586,8 +597,15 @@ def reconcile():
         try:
             apply_pool(template)
         except Exception:
-            print(f"reconcile {template['name']} failed", file=sys.stderr)
-            traceback.print_exc()
+            report(f"reconcile {template['name']} failed")
+
+
+def background():
+    """Reconcile once, then monitor workspaces forever."""
+    try:
+        reconcile()
+    except Exception:
+        report("reconcile failed")
     monitor()
 
 
@@ -684,7 +702,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError) as error:
             self.send(400, {"error": str(error)})
         except Exception as error:
-            traceback.print_exc()
+            report()
             self.send(500, {"error": str(error)})
 
     do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = handle_method
@@ -696,7 +714,7 @@ def main():
     Path(PLUGIN_SOCKET).unlink(missing_ok=True)
     server = ThreadingUnixStreamServer(PLUGIN_SOCKET, Handler)
     server.daemon_threads = True
-    threading.Thread(target=reconcile, daemon=True).start()
+    threading.Thread(target=background, daemon=True).start()
     print(f"{PLUGIN} plugin listening on {PLUGIN_SOCKET}", file=sys.stderr, flush=True)
     server.serve_forever()
 
