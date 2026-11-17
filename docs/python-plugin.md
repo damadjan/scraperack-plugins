@@ -2,20 +2,21 @@
 
 Runs Python functions in Scraperack microVMs. Install it from
 [`python/plugin`](../python/plugin) ([how](installing-plugins.md)) and call it with the
-[Python SDK](python-sdk.md). It needs Docker on the controller to build package disks,
-which the Scraperack installer sets up, and has no dependencies of its own.
+[Python SDK](python-sdk.md). It has no dependencies of its own.
 
 ## Environments
 
 An environment is an imported image, a pinned set of pip packages, resource limits, and
 scaling rules. Packages are installed once into a virtualenv, stored as a read-only disk
-that every node caches. Each environment is one Scraperack pool; its name and ID both work
+that every node caches. The install runs in a short-lived `python-build-…` microVM of the
+image (2 vCPUs, 2 GiB, network on), which sends the virtualenv back to the controller to be
+turned into the disk; the same image and packages reuse the disk. Each environment is one Scraperack pool; its name and ID both work
 wherever an environment is expected.
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `name` | | Letters, digits, spaces, `.`, `_`, `-` (up to 64) |
-| `image` | | An image imported from Docker that has `/usr/bin/python3` |
+| `image` | | An image with `/usr/bin/python3` and its `venv` module |
 | `packages` | `[]` | pip requirements, for example `httpx==0.28.1` |
 | `preload` | `[]` | Modules imported before the snapshot, so calls start warm |
 | `cpu_millis`, `memory_mib`, `disk_mib` | 1000, 512, 1024 | Size of each microVM |

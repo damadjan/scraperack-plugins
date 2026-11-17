@@ -19,7 +19,10 @@ import traceback
 import zipfile
 from pathlib import Path
 
-import cloudpickle
+try:
+    import cloudpickle
+except ImportError:   # package builds run with the image's own Python
+    cloudpickle = None
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scraperack_runtime  # noqa: E402

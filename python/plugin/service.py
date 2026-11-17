@@ -12,6 +12,7 @@ Standard library only: the plugin installs without downloading anything.
 import base64
 import binascii
 import http.client
+import io
 import json
 import os
 import pickletools
@@ -20,6 +21,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -179,11 +181,71 @@ def build_key(image, packages):
     return digest.hexdigest()
 
 
+# Runs in a builder microVM with the image's own Python, as a python-source payload (which
+# this plugin's executor and the executor baked into older images both run). The venv is built
+# away from /tmp/environment, where older guest agents mount the first disk; a venv runs from
+# wherever it is mounted, because it finds itself from its own pyvenv.cfg.
+BUILD_SOURCE = """
+import base64, glob, io, os, shutil, subprocess, tarfile
+
+VENV = "/tmp/python-build"
+
+
+def main(packages):
+    shutil.rmtree(VENV, ignore_errors=True)
+    for command in (["/usr/bin/python3", "-m", "venv", VENV],
+                    [VENV + "/bin/python", "-m", "pip", "install", "--no-cache-dir",
+                     "--disable-pip-version-check", *packages]):
+        process = subprocess.run(command, capture_output=True, text=True)
+        if process.returncode:
+            raise RuntimeError((process.stderr or process.stdout)[-4000:])
+    # pip and setuptools are not needed to run anything; leaving them out halves the disk.
+    for pattern in ("pip", "pip-*", "setuptools", "setuptools-*", "pkg_resources", "_distutils_hack",
+                    "distutils-precedence.pth"):
+        for path in glob.glob(VENV + "/lib/python3*/site-packages/" + pattern):
+            shutil.rmtree(path) if os.path.isdir(path) else os.remove(path)
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        archive.add(VENV, arcname=".")
+    shutil.rmtree(VENV, ignore_errors=True)
+    return base64.b64encode(buffer.getvalue()).decode()
+"""
+
+
+def run_build(image, packages, key):
+    """Install packages into a virtualenv in a microVM of `image`; return the packed venv."""
+    if not GUEST_DISK:
+        raise ApiError(500, "the plugin's guest disk is missing; reinstall the plugin")
+    pool = f"python-build-{key[:12]}"
+    core("POST", "/v1/pools", {
+        "name": pool, "image": image["id"], "cpu_millis": 2000, "memory_mib": 2048, "disk_mib": 1024,
+        "warm_instances": 0, "max_instances": 1, "timeout_secs": 1800, "idle_timeout_secs": 5,
+        "reuse": False, "network": True, "ports": [], "preload": [],
+        "disks": [{"key": GUEST_DISK, "mount": GUEST_MOUNT}],
+        "executor": ["/usr/bin/python3", f"{GUEST_MOUNT}/executor.py"],
+        "display_name": "Python package build"})
+    try:
+        task = core("POST", "/v1/tasks", {"pool": pool, "queue": True, "payload": {
+            "encoding": "python-source", "source": BUILD_SOURCE, "params": [["cloudpickle", *packages]]}})
+        while task["status"] not in FINISHED:
+            task = core("GET", f"/v1/tasks/{task['id']}/wait", timeout=90)
+        outcome = core("GET", f"/v1/tasks/{task['id']}/result")
+    finally:
+        try:
+            core("DELETE", f"/v1/pools/{pool}")
+        except (OSError, ApiError):
+            pass
+    if outcome["status"] != "succeeded":
+        error = (outcome.get("error") or f"package build {outcome['status']}").strip()
+        raise ApiError(400, f"installing packages failed:\n{error[-4000:]}")
+    value = outcome["value"] or {}
+    if value.get("encoding") != "json":
+        raise ApiError(500, "the package build returned something other than JSON")
+    return base64.b64decode(value["data"])
+
+
 def build_venv_disk(image, packages):
-    """Install packages into a virtualenv inside the image and return a core disk key."""
-    source = image.get("docker_source")
-    if not source:
-        raise ApiError(400, "the image must be imported from Docker to build packages")
+    """Install packages into a virtualenv in a microVM of the image and return a core disk key."""
     key = build_key(image, packages)
     cache = DATA / "builds.json"
     with lock:
@@ -191,16 +253,13 @@ def build_venv_disk(image, packages):
     disks = {disk["key"] for disk in core("GET", "/v1/disks")}
     if cached.get(key) in disks:
         return cached[key]
-    script = ("/usr/bin/python3 -m venv /tmp/environment && "
-              "/tmp/environment/bin/python -m pip install --no-cache-dir \"$@\"")
-    container = run("docker", "create", "--entrypoint", "/bin/sh", source, "-c", script, "--",
-                    "cloudpickle", *packages).strip()
+    archive = run_build(image, packages, key)
     work = Path(tempfile.mkdtemp(prefix="python-plugin-", dir=DATA))
     try:
-        run("docker", "start", "-a", container)
         root = work / "root"
         root.mkdir()
-        run("docker", "cp", f"{container}:/tmp/environment/.", str(root))
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as bundle:
+            bundle.extractall(root, filter="tar")   # bin/python links to the image's /usr/bin/python3
         used = int(run("du", "-sb", str(root)).split()[0])
         step = 16 * 1024 * 1024
         size = -(-max(used + used // 5 + 8 * 1024 * 1024, 32 * 1024 * 1024) // step) * step
@@ -211,7 +270,6 @@ def build_venv_disk(image, packages):
         with disk.open("rb") as file:
             stored = core("POST", "/v1/disks", file=file, timeout=None)
     finally:
-        subprocess.run(["docker", "rm", "-f", container], capture_output=True)
         shutil.rmtree(work, ignore_errors=True)
     with lock:
         cached = json.loads(cache.read_text()) if cache.exists() else {}
