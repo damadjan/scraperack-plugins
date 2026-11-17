@@ -1,0 +1,787 @@
+"""SQLite storage: sources, proxies, who lists what, settings, runs, events and API keys.
+
+Proxy lifecycle: new -> alive <-> (re-checked) ... -> dead. A dead proxy is not tested again
+while sources keep listing it: its row stays so a re-scrape cannot bring it back as new. Once no
+source has listed it for `retention_unlisted_days` the row is deleted (see apply_retention), so
+the tables stay about as big as what the sources list now instead of growing forever.
+
+One database file in the plugin's data directory, in WAL mode: readers never wait, and writers
+take `write_lock` so the scheduler's threads and the API never fight over SQLite's own lock.
+Timestamps are UTC text ('YYYY-MM-DD HH:MM:SS'), so they sort and compare as strings.
+"""
+import hashlib
+import json
+import secrets
+import sqlite3
+import threading
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone, UTC
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL,
+    url_hash TEXT NOT NULL UNIQUE,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    disabled_reason TEXT,
+    created_at TEXT NOT NULL,
+    last_scraped_at TEXT,
+    last_status TEXT,                       -- ok / empty / error
+    last_error TEXT,
+    last_http_status INTEGER,
+    last_found INTEGER NOT NULL DEFAULT 0,
+    last_new INTEGER NOT NULL DEFAULT 0,
+    last_duration_ms INTEGER,
+    scrapes INTEGER NOT NULL DEFAULT 0,
+    failures INTEGER NOT NULL DEFAULT 0,
+    fail_streak INTEGER NOT NULL DEFAULT 0, -- scrape errors in a row
+    listed INTEGER NOT NULL DEFAULT 0,      -- proxies this source lists
+    tested INTEGER NOT NULL DEFAULT 0,      -- running total: its proxies tested at least once
+    ever_alive INTEGER NOT NULL DEFAULT 0,  -- running total: its proxies that worked at least once
+    alive_now INTEGER NOT NULL DEFAULT 0,
+    pending INTEGER NOT NULL DEFAULT 0,     -- listed, not tested yet
+    yield_pct REAL,
+    last_budget INTEGER NOT NULL DEFAULT 0  -- proxies picked in the last test round
+);
+CREATE TABLE IF NOT EXISTS proxies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    hint TEXT,                              -- protocol suggested by the source
+    protocol TEXT,                          -- http / socks4 / socks5 (detected)
+    https INTEGER NOT NULL DEFAULT 0,
+    anonymity TEXT,                         -- transparent / anonymous / elite
+    latency_ms INTEGER,
+    exit_ip TEXT,
+    country TEXT,
+    status TEXT NOT NULL DEFAULT 'new',     -- new / alive / dead (final)
+    source_count INTEGER NOT NULL DEFAULT 1,
+    first_seen TEXT NOT NULL,
+    last_checked TEXT,
+    last_alive TEXT,
+    checks INTEGER NOT NULL DEFAULT 0,
+    successes INTEGER NOT NULL DEFAULT 0,
+    fail_streak INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (ip, port)
+);
+CREATE INDEX IF NOT EXISTS ix_proxies_status_checked ON proxies (status, last_checked);
+CREATE INDEX IF NOT EXISTS ix_proxies_alive ON proxies (status, protocol, latency_ms);
+CREATE TABLE IF NOT EXISTS proxy_sources (
+    source_id INTEGER NOT NULL,
+    ip TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    last_seen TEXT NOT NULL,
+    PRIMARY KEY (source_id, ip, port)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS ix_proxy_sources_ipport ON proxy_sources (ip, port);
+CREATE INDEX IF NOT EXISTS ix_proxy_sources_seen ON proxy_sources (last_seen);
+CREATE INDEX IF NOT EXISTS ix_proxy_sources_source_seen ON proxy_sources (source_id, last_seen);
+CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,                     -- scrape / test
+    status TEXT NOT NULL,                   -- running / done / failed
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    summary TEXT
+);
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    level TEXT NOT NULL,
+    message TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS api_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    prefix TEXT NOT NULL,                   -- first characters, shown in the GUI
+    key_hash TEXT NOT NULL UNIQUE,          -- sha256 of the key; the key itself is never stored
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    expires_at TEXT,                        -- NULL = never
+    rotated_at TEXT,
+    previous_hash TEXT,                     -- old key, still valid until previous_expires_at
+    previous_expires_at TEXT,
+    last_used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_api_keys_previous_hash ON api_keys (previous_hash);
+"""
+
+DEFAULT_JUDGES = 'http://httpbin.org/get\nhttp://azenv.net/\nhttp://proxyjudge.us/azenv.php'
+
+# key: (default, type, description)
+DEFAULTS = {
+    'api_auth_required': ('1', bool, 'API requests need an Authorization: Bearer key'),
+    'scraping_enabled': ('1', bool, 'Run the scraper on its schedule'),
+    'testing_enabled': ('1', bool, 'Run the tester continuously'),
+    'scrape_interval_min': ('30', int, 'Minutes between full scrapes of all sources'),
+    'scrape_batch_size': ('5', int, 'Source URLs per task'),
+    'scrape_parallel': ('6', int, 'Scrape tasks in flight at once'),
+    'scrape_timeout_s': ('30', int, 'Per-URL fetch timeout'),
+    'source_trial_size': ('300', int, 'Proxies tested from a new source before its yield counts'),
+    'source_min_share': ('0.02', float, 'Smallest share of the test budget an enabled source gets'),
+    'source_auto_disable': ('1', bool, 'Disable sources that keep failing or never yield a working proxy'),
+    'source_disable_fail_streak': ('3', int, 'Scrape errors in a row before a source is disabled'),
+    'test_round_pause_s': ('10', int, 'Pause between test rounds'),
+    'test_round_max': ('3000', int, 'Proxies tested per round (alive re-checks first, then new by source yield)'),
+    'test_batch_size': ('300', int, 'Max proxies per test task'),
+    'test_concurrency': ('120', int, 'Concurrent checks inside one microVM'),
+    'test_rate_min': ('2', int, 'Cluster-wide new connections/s the tester starts at (and never goes below)'),
+    'test_rate_max': ('8', int, 'Cluster-wide new connections/s the tester may ramp up to'),
+    'test_rate_ceiling': ('0', int, 'Learned limit: 80% of the rate that caused network trouble (0 = none)'),
+    'test_parallel': ('2', int, 'Test tasks in flight at once (one microVM each)'),
+    'network_backoff_s': ('300', int, 'Pause testing this long after network trouble'),
+    'test_timeout_s': ('10', int, 'Per-check timeout'),
+    'recheck_alive_min': ('15', int, 'Re-test alive proxies after this many minutes'),
+    'retention_unlisted_days': ('3', int, 'Forget dead proxies (and source listings) no source has listed for this many days'),
+    'retention_new_unlisted_hours': ('12', int, 'Forget untested proxies no source has listed for this many hours'),
+    'retention_dead_retest_days': ('0', int, 'Forget dead proxies after this many days even if still listed (0 = never)'),
+    'judges': (DEFAULT_JUDGES, str, 'Proxy judge URLs (plain HTTP, one per line, httpbin or azenv format)'),
+    'https_test_url': ('https://httpbin.org/ip', str, 'URL used to check CONNECT/HTTPS support'),
+    'image': ('python-generic-v2', str, 'Scraperack image (name or id) with Python 3 for both pools'),
+    'scraper_cpu': ('0.5', float, 'Scraper microVM CPU cores'),
+    'scraper_memory_mib': ('256', int, 'Scraper microVM memory (MiB)'),
+    'scraper_warm': ('0', int, 'Scraper warm microVMs'),
+    'scraper_max_instances': ('6', int, 'Scraper max microVMs'),
+    'tester_cpu': ('0.5', float, 'Tester microVM CPU cores'),
+    'tester_memory_mib': ('160', int, 'Tester microVM memory (MiB)'),
+    'tester_warm': ('0', int, 'Tester warm microVMs'),
+    'tester_max_instances': ('2', int, 'Tester max microVMs'),
+}
+STATUS_KEYS = ('status_test_rate', 'status_packages')   # kept by the service, not shown as settings
+PRIOR_YIELD = 0.05   # assumed yield for a source still in its trial
+KEY_PREFIX = 'psx_'
+PROTOCOLS = {'http', 'https', 'socks4', 'socks5'}
+ANONYMITY = {'transparent', 'anonymous', 'elite'}
+
+write_lock = threading.RLock()
+_local = threading.local()
+_path = None
+
+
+def now():
+    return datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S')
+
+
+def ago_ts(**delta):
+    return (datetime.now(UTC) - timedelta(**delta)).strftime('%Y-%m-%d %H:%M:%S')
+
+
+def url_hash(url):
+    return hashlib.sha256(url.encode()).hexdigest()
+
+
+def open_db(path):
+    """Set the database file and create the schema. Call once at startup."""
+    global _path
+    _path = str(path)
+    _local.__dict__.clear()
+    conn = db()
+    conn.execute('PRAGMA journal_mode=WAL')
+    with write_lock:   # executescript commits on its own
+        conn.executescript(SCHEMA)
+    seed()
+    with write() as conn:   # nothing runs before the scheduler starts: these were cut off
+        conn.execute("UPDATE runs SET status = 'failed', finished_at = ? WHERE status = 'running'", (now(),))
+
+
+def db():
+    """This thread's connection (autocommit; use write() for transactions)."""
+    conn = getattr(_local, 'conn', None)
+    if conn is None or getattr(_local, 'path', None) != _path:
+        conn = sqlite3.connect(_path, timeout=60, isolation_level=None, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA synchronous=NORMAL')
+        conn.execute('PRAGMA busy_timeout=60000')
+        conn.execute('PRAGMA cache_size=-32000')
+        _local.conn, _local.path = conn, _path
+    return conn
+
+
+@contextmanager
+def write():
+    """One write transaction at a time, across all threads."""
+    with write_lock:
+        conn = db()
+        conn.execute('BEGIN IMMEDIATE')
+        try:
+            yield conn
+        except BaseException:
+            conn.execute('ROLLBACK')
+            raise
+        conn.execute('COMMIT')
+
+
+def rows(sql, params=()):
+    return [dict(row) for row in db().execute(sql, params)]
+
+
+def scalar(sql, params=()):
+    row = db().execute(sql, params).fetchone()
+    return row[0] if row else None
+
+
+def marks(values):
+    return ','.join('?' * len(values))
+
+
+# ---------------------------------------------------------------- settings / events / runs
+
+def seed():
+    with write() as conn:
+        existing = {row[0] for row in conn.execute('SELECT key FROM settings')}
+        known = set(DEFAULTS) | set(STATUS_KEYS)
+        for key in existing - known:
+            conn.execute('DELETE FROM settings WHERE key = ?', (key,))
+        conn.executemany('INSERT INTO settings (key, value) VALUES (?, ?)',
+                         [(k, v[0]) for k, v in DEFAULTS.items() if k not in existing]
+                         + [(k, '') for k in STATUS_KEYS if k not in existing])
+
+
+def parse_setting(key, value):
+    default, kind, _ = DEFAULTS[key]
+    try:
+        if kind is bool:
+            return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+        return kind(value)
+    except (TypeError, ValueError):
+        return parse_setting(key, default) if value != default else None
+
+
+def get_settings():
+    raw = {row['key']: row['value'] for row in rows('SELECT key, value FROM settings')}
+    return {key: parse_setting(key, raw.get(key, default)) for key, (default, _, _) in DEFAULTS.items()}
+
+
+def settings_view():
+    values = get_settings()
+    return [{'key': key, 'value': values[key], 'type': kind.__name__, 'description': text}
+            for key, (_, kind, text) in DEFAULTS.items()]
+
+
+def save_settings(values):
+    clean = {}
+    for key, value in values.items():
+        if key not in DEFAULTS:
+            raise ValueError(f'unknown setting: {key}')
+        kind = DEFAULTS[key][1]
+        if kind is bool:
+            clean[key] = '1' if (value is True or str(value).strip().lower() in ('1', 'true', 'yes', 'on')) else '0'
+        else:
+            try:
+                parsed = kind(value)
+            except (TypeError, ValueError):
+                raise ValueError(f'{key} needs a {kind.__name__}') from None
+            if kind in (int, float) and parsed < 0:
+                raise ValueError(f'{key} cannot be negative')
+            clean[key] = str(parsed) if kind is not str else str(value).strip()
+    with write() as conn:
+        conn.executemany('INSERT INTO settings (key, value) VALUES (?, ?) '
+                         'ON CONFLICT (key) DO UPDATE SET value = excluded.value', list(clean.items()))
+    return len(clean)
+
+
+def get_value(key, default=None):
+    value = scalar('SELECT value FROM settings WHERE key = ?', (key,))
+    return default if value in (None, '') else value
+
+
+def set_value(key, value):
+    with write() as conn:
+        conn.execute('INSERT INTO settings (key, value) VALUES (?, ?) '
+                     'ON CONFLICT (key) DO UPDATE SET value = excluded.value', (key, str(value)))
+
+
+def log(level, message):
+    print(f'[{level}] {message}', flush=True)
+    with write() as conn:
+        conn.execute('INSERT INTO events (ts, level, message) VALUES (?, ?, ?)', (now(), level, message[:4000]))
+
+
+def trim_events(keep=3000):
+    with write() as conn:
+        cutoff = conn.execute('SELECT id FROM events ORDER BY id DESC LIMIT 1 OFFSET ?', (keep,)).fetchone()
+        if cutoff:
+            conn.execute('DELETE FROM events WHERE id <= ?', (cutoff[0],))
+        old_run = conn.execute('SELECT id FROM runs ORDER BY id DESC LIMIT 1 OFFSET 500').fetchone()
+        if old_run:
+            conn.execute('DELETE FROM runs WHERE id <= ?', (old_run[0],))
+
+
+def start_run(kind):
+    with write() as conn:
+        # Anything left 'running' from a previous process is dead.
+        conn.execute("UPDATE runs SET status = 'failed', finished_at = ? WHERE kind = ? AND status = 'running'",
+                     (now(), kind))
+        return conn.execute("INSERT INTO runs (kind, status, started_at) VALUES (?, 'running', ?)",
+                            (kind, now())).lastrowid
+
+
+def finish_run(run_id, status, summary):
+    with write() as conn:
+        conn.execute('UPDATE runs SET status = ?, finished_at = ?, summary = ? WHERE id = ?',
+                     (status, now(), json.dumps(summary), run_id))
+
+
+# ---------------------------------------------------------------- sources
+
+def add_sources(urls):
+    new, seen = [], set()
+    for url in urls:
+        url = url.strip()
+        if not url or url.startswith('#'):
+            continue
+        if '://' not in url:
+            url = 'https://' + url
+        if url not in seen:
+            seen.add(url)
+            new.append((url, url_hash(url), now()))
+    if not new:
+        return 0
+    with write() as conn:
+        before = conn.total_changes
+        conn.executemany('INSERT OR IGNORE INTO sources (url, url_hash, created_at) VALUES (?, ?, ?)', new)
+        return conn.total_changes - before
+
+
+def list_sources(search=''):
+    where, params = '', ()
+    if search:
+        where, params = 'WHERE url LIKE ?', (f'%{search}%',)
+    return rows('SELECT id, url, enabled, disabled_reason, last_scraped_at, last_status, last_error, '
+                'last_http_status, last_found, last_new, last_duration_ms, scrapes, failures, listed, tested, '
+                f'ever_alive, alive_now, pending, yield_pct, last_budget FROM sources {where} ORDER BY id', params)
+
+
+def set_sources_enabled(ids, enabled):
+    with write() as conn:
+        return conn.execute(
+            f'UPDATE sources SET enabled = ?, disabled_reason = NULL, fail_streak = 0 WHERE id IN ({marks(ids)})',
+            (1 if enabled else 0, *ids)).rowcount
+
+
+def delete_sources(ids):
+    with write() as conn:
+        conn.execute(f'DELETE FROM proxy_sources WHERE source_id IN ({marks(ids)})', ids)
+        return conn.execute(f'DELETE FROM sources WHERE id IN ({marks(ids)})', ids).rowcount
+
+
+def disable_failing_sources():
+    with write() as conn:
+        return conn.execute("UPDATE sources SET enabled = 0, disabled_reason = 'disabled by hand: failing or empty' "
+                            "WHERE enabled = 1 AND last_status IN ('error', 'empty')").rowcount
+
+
+def enabled_sources():
+    return rows('SELECT id, url FROM sources WHERE enabled = 1 ORDER BY id')
+
+
+def store_scrape_result(source_id, result):
+    """Save one URL's scrape result; returns (found, new)."""
+    ts = now()
+    found = result.get('proxies') or []
+    new = 0
+    with write() as conn:
+        for start in range(0, len(found), 5000):
+            part = found[start:start + 5000]
+            before = conn.total_changes
+            conn.executemany("INSERT OR IGNORE INTO proxies (ip, port, hint, first_seen) VALUES (?, ?, ?, ?)",
+                             [(ip, int(port), hint, ts) for ip, port, hint in part])
+            new += conn.total_changes - before
+            conn.executemany('INSERT INTO proxy_sources (source_id, ip, port, last_seen) VALUES (?, ?, ?, ?) '
+                             'ON CONFLICT (source_id, ip, port) DO UPDATE SET last_seen = excluded.last_seen',
+                             [(source_id, ip, int(port), ts) for ip, port, _ in part])
+        status = 'error' if not result.get('ok') else ('ok' if found else 'empty')
+        conn.execute(
+            'UPDATE sources SET last_scraped_at = ?, last_status = ?, last_error = ?, last_http_status = ?, '
+            'last_found = ?, last_new = ?, last_duration_ms = ?, scrapes = scrapes + 1, '
+            'fail_streak = CASE WHEN ? THEN fail_streak + 1 ELSE 0 END, '
+            'failures = failures + ? WHERE id = ?',
+            (ts, status, result.get('error') or None, result.get('status'), len(found), new, result.get('ms'),
+             status == 'error', 1 if status == 'error' else 0, source_id))
+    return len(found), new
+
+
+def refresh_source_counts():
+    """How many sources list each untested proxy; proxies on several lists are tested first."""
+    with write() as conn:
+        conn.execute("UPDATE proxies SET source_count = (SELECT COUNT(*) FROM proxy_sources ps "
+                     "WHERE ps.ip = proxies.ip AND ps.port = proxies.port) WHERE status = 'new'")
+
+
+def refresh_source_stats(cfg):
+    """Refresh per-source counts and auto-disable sources that fail or never yield.
+
+    `tested` and `ever_alive` are running totals kept by store_test_results, so they survive
+    retention deleting the proxies behind them; only the current counts are recomputed here.
+    """
+    stats = rows("SELECT ps.source_id AS sid, COUNT(*) AS listed, "
+                 "SUM(p.status = 'alive') AS alive_now, SUM(p.status = 'new') AS pending "
+                 "FROM proxy_sources ps JOIN proxies p ON p.ip = ps.ip AND p.port = ps.port "
+                 "GROUP BY ps.source_id")
+    disabled = []
+    with write() as conn:
+        conn.execute('UPDATE sources SET listed = 0, alive_now = 0, pending = 0')
+        conn.executemany('UPDATE sources SET listed = ?, alive_now = ?, pending = ? WHERE id = ?',
+                         [(r['listed'], r['alive_now'] or 0, r['pending'] or 0, r['sid']) for r in stats])
+        conn.execute('UPDATE sources SET yield_pct = CASE WHEN tested > 0 '
+                     'THEN ROUND(100.0 * ever_alive / tested, 2) ELSE NULL END')
+        if cfg['source_auto_disable']:
+            streak, trial = cfg['source_disable_fail_streak'], cfg['source_trial_size']
+            for row in conn.execute('SELECT id, url FROM sources WHERE enabled = 1 AND fail_streak >= ?', (streak,)):
+                disabled.append((row[0], row[1], f'{streak}+ scrape errors in a row'))
+            for row in conn.execute('SELECT id, url FROM sources WHERE enabled = 1 AND tested >= ? AND ever_alive = 0',
+                                    (trial,)):
+                disabled.append((row[0], row[1], f'0 working proxies out of {trial}+ tested'))
+            conn.executemany('UPDATE sources SET enabled = 0, disabled_reason = ? WHERE id = ?',
+                             [(reason, sid) for sid, _, reason in disabled])
+    return disabled
+
+
+def pick_for_test(cfg):
+    """Build one test round: stale alive proxies first, then new ones split across sources by yield.
+
+    Dead proxies are never picked. A source still in its trial (fewer than source_trial_size of
+    its proxies tested) gets enough to finish the trial; the rest of the budget is shared in
+    proportion to each source's yield, with a floor of source_min_share so weak sources still trickle.
+    """
+    budget = cfg['test_round_max']
+    cols = 'p.id, p.ip, p.port, p.hint, p.protocol, p.status'
+    picked = {}
+    alive_due = rows(f"SELECT {cols} FROM proxies p WHERE p.status = 'alive' AND "
+                     "(p.last_checked IS NULL OR p.last_checked < ?) ORDER BY p.last_checked LIMIT ?",
+                     (ago_ts(minutes=cfg['recheck_alive_min']), budget))
+    for row in alive_due:
+        picked[row['id']] = row
+    remaining = budget - len(picked)
+
+    source_rows = rows('SELECT id, tested, ever_alive, pending FROM sources WHERE enabled = 1 AND pending > 0')
+    trial = cfg['source_trial_size']
+    allocation = {}
+    for s in source_rows:
+        if s['tested'] < trial:
+            allocation[s['id']] = min(trial - s['tested'], s['pending'])
+    trial_total = sum(allocation.values())
+    if trial_total > remaining:   # more trials than budget: share it out evenly this round
+        scale = remaining / trial_total
+        allocation = {k: max(1, int(v * scale)) for k, v in allocation.items()}
+    left = max(0, remaining - sum(allocation.values()))
+    capacity = {s['id']: s['pending'] - allocation.get(s['id'], 0) for s in source_rows}
+    # Proven sources are weighted by their yield; sources still in trial share leftovers at a
+    # neutral prior so the budget is never left unused.
+    weights = {s['id']: max(cfg['source_min_share'],
+                            s['ever_alive'] / s['tested'] if s['tested'] >= trial else PRIOR_YIELD)
+               for s in source_rows if capacity[s['id']] > 0}
+    while left > 0 and weights:   # capacity left by small sources flows to the others
+        total = sum(weights.values())
+        handed = 0
+        for sid, weight in list(weights.items()):
+            share = min(capacity[sid], max(1, int(left * weight / total)))
+            allocation[sid] = allocation.get(sid, 0) + share
+            capacity[sid] -= share
+            handed += share
+            if capacity[sid] <= 0:
+                del weights[sid]
+        if handed == 0:
+            break
+        left -= handed
+
+    budgets = {}
+    for sid, count in sorted(allocation.items(), key=lambda kv: -kv[1]):
+        count = min(count, budget - len(picked))
+        if count <= 0:
+            continue
+        # Lists overlap heavily, so another source may already have picked this source's top
+        # proxies; over-fetch and skip those so each source really gets its share. Free proxies
+        # die within hours: what the source lists now comes first, then proxies on several
+        # lists, then the most recently discovered.
+        candidates = rows(f"SELECT {cols} FROM proxy_sources ps JOIN proxies p ON p.ip = ps.ip AND p.port = ps.port "
+                          "WHERE ps.source_id = ? AND p.status = 'new' "
+                          "ORDER BY ps.last_seen DESC, p.source_count DESC, p.id DESC LIMIT ?",
+                          (sid, count + len(picked)))
+        taken = 0
+        for row in candidates:
+            if taken >= count:
+                break
+            if row['id'] not in picked:
+                picked[row['id']] = row
+                taken += 1
+        budgets[sid] = taken
+    with write() as conn:
+        conn.execute('UPDATE sources SET last_budget = 0 WHERE last_budget != 0')
+        conn.executemany('UPDATE sources SET last_budget = ? WHERE id = ?', [(n, sid) for sid, n in budgets.items()])
+    return list(picked.values()), len(alive_due)
+
+
+def store_test_results(results, country_of):
+    ts = now()
+    ok_rows, bad_rows = [], []
+    for r in results:
+        if r.get('ok'):
+            ok_rows.append((r['protocol'], 1 if r.get('https') else 0, r.get('anonymity'), r.get('latency_ms'),
+                            (r.get('exit_ip') or '')[:45] or None, country_of(r['ip']), ts, ts, r['id']))
+        else:
+            bad_rows.append((ts, r['id']))
+    with write() as conn:
+        _count_source_yield(conn, results)
+        conn.executemany("UPDATE proxies SET status = 'alive', protocol = ?, https = ?, anonymity = ?, latency_ms = ?, "
+                         "exit_ip = ?, country = ?, last_checked = ?, last_alive = ?, checks = checks + 1, "
+                         "successes = successes + 1, fail_streak = 0 WHERE id = ?", ok_rows)
+        # Dead proxies are not picked again; retention forgets them once no source lists them.
+        conn.executemany("UPDATE proxies SET status = 'dead', last_checked = ?, checks = checks + 1, "
+                         "fail_streak = fail_streak + 1 WHERE id = ?", bad_rows)
+    return len(ok_rows), len(bad_rows)
+
+
+def _count_source_yield(conn, results):
+    """Add a batch to each listing source's running `tested` / `ever_alive` totals.
+
+    A proxy counts once per source: when it is first tested, and when it first works. Runs
+    before the batch's own updates, while the proxies still show their previous state.
+    """
+    ok = {r['id']: bool(r.get('ok')) for r in results}
+    if not ok:
+        return
+    tested, alive = {}, {}
+    ids = list(ok)
+    for start in range(0, len(ids), 900):
+        part = ids[start:start + 900]
+        for sid, pid, status, successes in conn.execute(
+                'SELECT ps.source_id, p.id, p.status, p.successes FROM proxies p '
+                f'JOIN proxy_sources ps ON ps.ip = p.ip AND ps.port = p.port WHERE p.id IN ({marks(part)})', part):
+            if status == 'new':
+                tested[sid] = tested.get(sid, 0) + 1
+            if ok[pid] and not successes:
+                alive[sid] = alive.get(sid, 0) + 1
+    conn.executemany('UPDATE sources SET tested = tested + ?, ever_alive = ever_alive + ? WHERE id = ?',
+                     [(tested.get(sid, 0), alive.get(sid, 0), sid) for sid in set(tested) | set(alive)])
+
+
+# ---------------------------------------------------------------- retention
+
+def apply_retention(cfg, chunk=20000):
+    """Forget what the sources no longer list. Returns counts of deleted rows.
+
+    1. Source listings not seen for `retention_unlisted_days` are dropped.
+    2. Dead proxies left with no listing are deleted; if a source lists one again later it comes
+       back as new and gets one fresh test.
+    3. Untested proxies no source listed in `retention_new_unlisted_hours` are deleted: free
+       proxies that drop off every list are almost always gone.
+    4. With `retention_dead_retest_days`, dead proxies older than that are deleted even if still
+       listed, so they get one more test.
+    Alive proxies are never deleted here; they become dead (and then go) when they stop working.
+    Work is done in chunks so the write lock is never held for long.
+    """
+    out = {'listings': 0, 'dead': 0, 'untested': 0, 'dead_retest': 0}
+    days = cfg['retention_unlisted_days']
+    if days > 0:
+        cutoff = ago_ts(days=days)
+        while True:
+            with write() as conn:
+                deleted = _delete_listings(conn, cutoff, chunk)
+            out['listings'] += deleted
+            if deleted < chunk:
+                break
+        out['dead'] = _delete_where("p.status = 'dead' AND NOT EXISTS (SELECT 1 FROM proxy_sources ps "
+                                    "WHERE ps.ip = p.ip AND ps.port = p.port)", (), chunk)
+    hours = cfg['retention_new_unlisted_hours']
+    if hours > 0:
+        cutoff = ago_ts(hours=hours)
+        out['untested'] = _delete_where("p.status = 'new' AND p.first_seen < ? AND NOT EXISTS (SELECT 1 FROM "
+                                        "proxy_sources ps WHERE ps.ip = p.ip AND ps.port = p.port AND ps.last_seen >= ?)",
+                                        (cutoff, cutoff), chunk)
+    retest = cfg['retention_dead_retest_days']
+    if retest > 0:
+        out['dead_retest'] = _delete_where("p.status = 'dead' AND p.last_checked < ?", (ago_ts(days=retest),), chunk)
+    return out
+
+
+def _delete_listings(conn, cutoff, chunk):
+    # proxy_sources has no rowid; delete by key, oldest first.
+    keys = conn.execute('SELECT source_id, ip, port FROM proxy_sources WHERE last_seen < ? '
+                        'ORDER BY last_seen LIMIT ?', (cutoff, chunk)).fetchall()
+    conn.executemany('DELETE FROM proxy_sources WHERE source_id = ? AND ip = ? AND port = ?', keys)
+    return len(keys)
+
+
+def _delete_where(condition, params, chunk):
+    """Delete matching proxies, walking the table by id so each transaction stays small."""
+    deleted, last_id = 0, 0
+    top = scalar('SELECT MAX(id) FROM proxies') or 0
+    while last_id < top:
+        upper = last_id + chunk * 5
+        with write() as conn:
+            deleted += conn.execute(f'DELETE FROM proxies WHERE id IN (SELECT p.id FROM proxies p '
+                                    f'WHERE p.id > ? AND p.id <= ? AND {condition})',
+                                    (last_id, upper, *params)).rowcount
+        last_id = upper
+    return deleted
+
+
+# ---------------------------------------------------------------- reading
+
+def split(value, allowed, name):
+    if not value:
+        return []
+    items = [v.strip().lower() for v in str(value).split(',') if v.strip()]
+    bad = [v for v in items if v not in allowed]
+    if bad:
+        raise ValueError(f'unknown {name}: {", ".join(bad)}; allowed: {", ".join(sorted(allowed))}')
+    return items
+
+
+def query_proxies(protocol=None, anonymity=None, country=None, max_latency=None, checked_within=None,
+                  limit=100, sort='latency'):
+    where, params = ["status = 'alive'"], []
+    protocols = split(protocol, PROTOCOLS, 'protocol')
+    if protocols:
+        parts = []
+        plain = [p for p in protocols if p != 'https']
+        if plain:
+            parts.append(f'protocol IN ({marks(plain)})')
+            params += plain
+        if 'https' in protocols:
+            parts.append("(protocol = 'http' AND https = 1)")
+        where.append('(' + ' OR '.join(parts) + ')')
+    levels = split(anonymity, ANONYMITY, 'anonymity')
+    if levels:
+        where.append(f'anonymity IN ({marks(levels)})')
+        params += levels
+    countries = [c.strip().upper() for c in str(country or '').split(',') if c.strip()]
+    if countries:
+        where.append(f'country IN ({marks(countries)})')
+        params += countries
+    if max_latency:
+        where.append('latency_ms <= ?')
+        params.append(int(max_latency))
+    if checked_within:
+        where.append('last_checked >= ?')
+        params.append(ago_ts(minutes=int(checked_within)))
+    order = {'latency': 'latency_ms ASC', 'checked': 'last_checked DESC',
+             'uptime': 'successes DESC, latency_ms ASC'}.get(sort)
+    if order is None:
+        raise ValueError('sort must be latency, checked or uptime')
+    result = rows('SELECT ip, port, protocol, https, anonymity, latency_ms, country, exit_ip, last_checked, checks, '
+                  f'successes FROM proxies WHERE {" AND ".join(where)} ORDER BY {order} LIMIT ?',
+                  (*params, max(1, min(int(limit), 50000))))
+    for row in result:
+        row['https'] = bool(row['https'])
+        row['url'] = f"{row['protocol']}://{row['ip']}:{row['port']}"
+        row['last_checked'] = row['last_checked'].replace(' ', 'T') + 'Z' if row['last_checked'] else None
+    return result
+
+
+def stats():
+    by_status = {r['status']: r['n'] for r in rows('SELECT status, COUNT(*) AS n FROM proxies GROUP BY status')}
+    alive = {'http': 0, 'https': 0, 'socks4': 0, 'socks5': 0, 'elite': 0, 'anonymous': 0, 'transparent': 0}
+    for row in rows("SELECT protocol, anonymity, https, COUNT(*) AS n FROM proxies WHERE status = 'alive' "
+                    'GROUP BY protocol, anonymity, https'):
+        for key in (row['protocol'], row['anonymity']):
+            if key in alive:
+                alive[key] += row['n']
+        if row['https']:
+            alive['https'] += row['n']
+    source = rows('SELECT COUNT(*) AS total, COALESCE(SUM(enabled), 0) AS enabled FROM sources')[0]
+    return {
+        'proxies': {'alive': by_status.get('alive', 0), 'new': by_status.get('new', 0), 'dead': by_status.get('dead', 0)},
+        'alive': alive,
+        'fast': scalar("SELECT COUNT(*) FROM proxies WHERE status = 'alive' AND latency_ms <= 2000"),
+        'sources': source,
+    }
+
+
+def last_runs():
+    out = {}
+    for kind in ('scrape', 'test'):
+        found = rows('SELECT * FROM runs WHERE kind = ? ORDER BY id DESC LIMIT 1', (kind,))
+        run = found[0] if found else None
+        if run and run['summary']:
+            run['summary'] = json.loads(run['summary'])
+        out[kind] = run
+    return out
+
+
+def recent_events(limit=150):
+    return rows('SELECT id, ts, level, message FROM events ORDER BY id DESC LIMIT ?', (limit,))
+
+
+# ---------------------------------------------------------------- API keys
+# Only a sha256 of each key is stored; the full key is shown once, when created or rotated.
+
+def new_secret():
+    key = KEY_PREFIX + secrets.token_urlsafe(32)
+    return key, key[:len(KEY_PREFIX) + 6], hashlib.sha256(key.encode()).hexdigest()
+
+
+def list_keys():
+    ts = now()
+    out = rows('SELECT id, name, prefix, enabled, created_at, expires_at, rotated_at, previous_hash, '
+               'previous_expires_at, last_used_at FROM api_keys ORDER BY id')
+    for row in out:
+        row['status'] = ('disabled' if not row['enabled']
+                         else 'expired' if row['expires_at'] and row['expires_at'] <= ts else 'active')
+        grace = row.pop('previous_expires_at')
+        row['old_key_valid_until'] = grace if row.pop('previous_hash') and grace and grace > ts else None
+        row['enabled'] = bool(row['enabled'])
+    return out
+
+
+def create_key(name, days):
+    name = str(name or '').strip()[:100]
+    if not name:
+        raise ValueError('name is required')
+    key, prefix, digest = new_secret()
+    expires = ago_ts(days=-int(days)) if days else None
+    with write() as conn:
+        key_id = conn.execute('INSERT INTO api_keys (name, prefix, key_hash, created_at, expires_at) '
+                              'VALUES (?, ?, ?, ?, ?)', (name, prefix, digest, now(), expires)).lastrowid
+    return {'id': key_id, 'key': key}
+
+
+def rotate_key(key_id, grace_minutes):
+    """New secret for the same key; the old one keeps working for grace_minutes (0 = stops at once)."""
+    key, prefix, digest = new_secret()
+    grace = int(grace_minutes or 0)
+    with write() as conn:
+        changed = conn.execute(
+            'UPDATE api_keys SET previous_hash = CASE WHEN ? > 0 THEN key_hash ELSE NULL END, '
+            'previous_expires_at = ?, prefix = ?, key_hash = ?, rotated_at = ? WHERE id = ?',
+            (grace, ago_ts(minutes=-grace) if grace else None, prefix, digest, now(), key_id)).rowcount
+    if not changed:
+        raise KeyError('API key not found')
+    return {'id': key_id, 'key': key}
+
+
+def set_key_enabled(key_id, enabled):
+    with write() as conn:
+        if not conn.execute('UPDATE api_keys SET enabled = ? WHERE id = ?', (1 if enabled else 0, key_id)).rowcount:
+            raise KeyError('API key not found')
+
+
+def delete_key(key_id):
+    with write() as conn:
+        if not conn.execute('DELETE FROM api_keys WHERE id = ?', (key_id,)).rowcount:
+            raise KeyError('API key not found')
+
+
+def check_key(key):
+    """None if the key may be used, else the reason it may not."""
+    if not key:
+        return 'missing API key: send Authorization: Bearer <key>'
+    digest = hashlib.sha256(key.encode()).hexdigest()
+    found = rows('SELECT id, enabled, expires_at, key_hash, previous_expires_at, last_used_at FROM api_keys '
+                 'WHERE key_hash = ? OR previous_hash = ?', (digest, digest))
+    if not found:
+        return 'invalid API key'
+    row, ts = found[0], now()
+    if row['key_hash'] != digest and not (row['previous_expires_at'] and row['previous_expires_at'] > ts):
+        return 'this API key was rotated; use the new key'
+    if not row['enabled']:
+        return 'API key is disabled'
+    if row['expires_at'] and row['expires_at'] <= ts:
+        return 'API key has expired'
+    # last_used_at is written at most once a minute per key, so busy clients do not cost writes.
+    if row['last_used_at'] is None or row['last_used_at'] <= ago_ts(minutes=1):
+        with write() as conn:
+            conn.execute('UPDATE api_keys SET last_used_at = ? WHERE id = ?', (ts, row['id']))
+    return None

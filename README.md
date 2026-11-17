@@ -8,6 +8,7 @@ GUI, its own API, and an SDK.
 |---|---|---|
 | [`python`](python/) | Python environments (pip packages built once, warm microVMs) and executions (every function call with its output) | `pip install scraperack-python` |
 | [`workspaces`](workspaces/) | Long-lived XFCE desktops in the browser, with a persistent volume, suspend and resume, and moves to a node with room | none |
+| [`proxies`](proxies/) | Free public proxies scraped from your sources, tested in microVMs, and served through an API with keys | none |
 
 ## Quick start
 
@@ -38,6 +39,7 @@ with Python("http://controller:7070") as py:
 - [Python plugin](docs/python-plugin.md)
 - [Python SDK](docs/python-sdk.md)
 - [Workspaces plugin](docs/workspaces-plugin.md)
+- [Proxies plugin](docs/proxies-plugin.md)
 
 ## License
 
