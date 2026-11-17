@@ -1,0 +1,687 @@
+<!doctype html>
+<!-- Proxies: the plugin's own page. Dashboard, sources, working proxies, API keys and
+     settings. Plain HTML, CSS and JavaScript; talks to the plugin API next to it. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proxies</title>
+<style>
+  :root {
+    --bg: #09090d; --bg-2: #101017; --card: #14141c; --card-2: #1b1b25; --line: #262633;
+    --line-2: #343445; --text: #ececf2; --muted: #9a9aab; --faint: #6b6b7d;
+    --accent: #d946ef; --accent-2: #a855f7; --accent-soft: rgba(217, 70, 239, .14);
+    --ok: #34d399; --warn: #fbbf24; --info: #60a5fa; --bad: #f87171;
+    --radius: 14px; --shadow: 0 10px 30px rgba(0, 0, 0, .45);
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+         -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:disabled { cursor: default; opacity: .55; }
+  [hidden] { display: none !important; }
+  .mono { font-family: var(--mono); font-size: 12.5px; }
+  .muted { color: var(--muted); }
+  .spacer { flex: 1; }
+
+  .top { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px;
+         min-height: 60px; padding: 0 28px; background: rgba(9, 9, 13, .82); flex-wrap: wrap;
+         backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 15px;
+           text-decoration: none; color: inherit; }
+  .brand-mark { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+                background: linear-gradient(135deg, var(--accent), var(--accent-2));
+                box-shadow: 0 4px 16px rgba(217, 70, 239, .35); }
+  .brand-mark svg { width: 17px; height: 17px; color: #fff; }
+  .nav { display: flex; gap: 4px; margin-left: 18px; flex-wrap: wrap; }
+  .nav a { height: 34px; padding: 0 14px; display: inline-flex; align-items: center; border-radius: 9px;
+           color: var(--muted); text-decoration: none; font-weight: 600; }
+  .nav a:hover { color: var(--text); background: var(--card-2); }
+  .nav a.on { color: var(--text); background: var(--card-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+  .health { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+         height: 36px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line-2);
+         background: var(--card-2); font-weight: 600; white-space: nowrap; text-decoration: none; }
+  .btn:hover:not(:disabled) { background: #232330; border-color: #46465a; }
+  .btn.primary { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border: 0;
+                 color: #fff; box-shadow: 0 6px 18px rgba(217, 70, 239, .28); }
+  .btn.primary:hover:not(:disabled) { filter: brightness(1.08);
+                 background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+  .btn.danger { color: #fecaca; border-color: #5b2330; background: #241319; }
+  .btn.danger:hover:not(:disabled) { background: #33161f; border-color: #7f2a3c; }
+  .btn.small { height: 30px; padding: 0 12px; font-size: 13px; border-radius: 8px; }
+
+  .page { max-width: 1400px; margin: 0 auto; padding: 30px 28px 60px; }
+  .hero { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
+  .hero h1 { margin: 0; font-size: 26px; letter-spacing: -.3px; }
+  .hero p { margin: 6px 0 0; color: var(--muted); max-width: 760px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+           padding: 18px; margin-bottom: 18px; }
+  .panel h2 { margin: 0 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .07em;
+              color: var(--muted); font-weight: 650; display: flex; align-items: center; gap: 10px; }
+  .metrics { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin-bottom: 18px; }
+  .metric { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
+  .metric .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  .metric .value { font-size: 28px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .metric.alive .value { color: var(--ok); }
+  .breakdown { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); }
+  .breakdown div { background: var(--card-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+  .breakdown span { display: block; color: var(--muted); font-size: 12px; }
+  .breakdown b { font-size: 18px; font-variant-numeric: tabular-nums; }
+  .two { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); }
+  @media (max-width: 960px) { .two { grid-template-columns: 1fr; } .page { padding: 20px 14px 40px; } .top { padding: 8px 14px; } }
+  .run { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .run:last-of-type { border-bottom: 0; }
+  .run .what { width: 70px; font-weight: 650; padding-top: 2px; }
+  .run .detail { color: var(--muted); font-size: 13px; }
+  .log { max-height: 460px; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+  .log div { display: grid; grid-template-columns: 78px 44px 1fr; gap: 8px; padding: 2px 0; }
+  .log .ts { color: var(--faint); }
+  .log .warn { color: var(--warn); }
+  .log .error { color: var(--bad); }
+  .log .info { color: var(--info); }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 9px; border-radius: 999px;
+          font-size: 12px; font-weight: 600; border: 1px solid var(--line-2); background: var(--card-2);
+          color: #ddd; white-space: nowrap; }
+  .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .pill.ok .dot, .pill.done .dot, .pill.yes .dot, .pill.active .dot { background: var(--ok); }
+  .pill.running .dot { background: var(--warn); animation: pulse 1.2s infinite; }
+  .pill.error .dot, .pill.failed .dot, .pill.expired .dot { background: var(--bad); }
+  .pill.empty .dot, .pill.no .dot, .pill.disabled .dot { background: var(--faint); }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  .toolbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
+  label.field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+  input, select, textarea { background: var(--bg-2); color: var(--text); border: 1px solid var(--line-2);
+         border-radius: 9px; padding: 8px 10px; font: inherit; min-width: 0; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea { font-family: var(--mono); font-size: 12.5px; resize: vertical; }
+  .checks { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border-radius: 9px;
+          border: 1px solid var(--line-2); background: var(--bg-2); cursor: pointer; font-size: 13px; color: var(--text); }
+  .chip:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+  .chip input { accent-color: var(--accent); margin: 0; }
+
+  .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card);
+                max-height: calc(100vh - 290px); min-height: 160px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { position: sticky; top: 0; z-index: 1; background: #181821; color: var(--muted); font-weight: 600;
+       font-size: 12.5px; cursor: pointer; user-select: none; }
+  th.sorted { color: var(--text); }
+  th.nosort { cursor: default; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tbody tr:hover { background: #191922; }
+  tbody tr.selected { background: var(--accent-soft); }
+  td.url { max-width: 460px; overflow: hidden; text-overflow: ellipsis; }
+  td.note { max-width: 360px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  td input[type=checkbox], th input[type=checkbox] { accent-color: var(--accent); }
+  .count { color: var(--muted); font-size: 13px; }
+
+  .settings { display: grid; gap: 18px; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); }
+  .setting { display: grid; grid-template-columns: 1fr 150px; gap: 4px 14px; align-items: center; padding: 9px 0;
+             border-bottom: 1px solid var(--line); }
+  .setting:last-child { border-bottom: 0; }
+  .setting .name { font-weight: 600; }
+  .setting .hint { grid-column: 1; color: var(--muted); font-size: 12.5px; }
+  .setting .control { grid-row: 1 / span 2; grid-column: 2; display: flex; align-items: center; gap: 6px; }
+  .setting .control input:not([type=checkbox]), .setting .control select { width: 100%; }
+  .setting.wide { grid-template-columns: 1fr; }
+  .setting.wide .control { grid-row: auto; grid-column: 1; }
+  .setting.wide textarea { width: 100%; min-height: 84px; }
+  .setting input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
+  .setting .suffix { color: var(--muted); font-size: 12px; }
+  .setting.dirty .name::after { content: " •"; color: var(--accent); }
+  .cluster { display: grid; grid-template-columns: 1fr 110px 110px; gap: 8px 12px; align-items: center; }
+  .cluster .head { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+
+  pre.code { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+             overflow: auto; font: 12.5px/1.55 var(--mono); margin: 8px 0 0; white-space: pre-wrap; word-break: break-all; }
+
+  dialog { width: min(560px, 94vw); padding: 0; color: var(--text); background: var(--bg-2);
+           border: 1px solid var(--line-2); border-radius: 18px; box-shadow: var(--shadow); }
+  dialog::backdrop { background: rgba(3, 3, 6, .66); backdrop-filter: blur(3px); }
+  .dlg-head { padding: 22px 24px 4px; }
+  .dlg-head h2 { margin: 0; font-size: 19px; }
+  .dlg-head p { margin: 4px 0 0; color: var(--muted); }
+  .dlg-body { padding: 14px 24px 6px; display: grid; gap: 14px; }
+  .dlg-foot { display: flex; gap: 10px; align-items: center; padding: 16px 24px 22px; }
+
+  .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 50; padding: 10px 16px;
+           border-radius: 10px; background: var(--card-2); border: 1px solid var(--line-2); box-shadow: var(--shadow); }
+  .toast.error { border-color: #7f2a3c; color: #fecaca; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-globe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></symbol>
+</svg>
+
+<header class="top">
+  <a class="brand" href="#"><span class="brand-mark"><svg><use href="#i-globe"/></svg></span>Proxies</a>
+  <nav class="nav">
+    <a href="#" data-view="dashboard">Dashboard</a><a href="#/sources" data-view="sources">Sources</a>
+    <a href="#/proxies" data-view="proxies">Proxies</a><a href="#/keys" data-view="keys">API keys</a>
+    <a href="#/settings" data-view="settings">Settings</a>
+  </nav>
+  <span class="spacer"></span>
+  <span class="health" id="health"></span>
+</header>
+
+<!-- Dashboard -->
+<main class="page" id="view-dashboard">
+  <div class="hero">
+    <div><h1>Dashboard</h1><p>Free public proxies from your sources, tested for protocol, speed, HTTPS support and anonymity in Scraperack microVMs.</p></div>
+    <span class="spacer"></span>
+    <div class="actions">
+      <button class="btn" data-run="test">Test now</button>
+      <button class="btn primary" data-run="scrape">Scrape now</button>
+    </div>
+  </div>
+  <div class="metrics">
+    <div class="metric alive"><div class="label">Alive</div><div class="value" id="m-alive">—</div></div>
+    <div class="metric"><div class="label">Untested</div><div class="value" id="m-new">—</div></div>
+    <div class="metric"><div class="label">Dead</div><div class="value" id="m-dead">—</div></div>
+    <div class="metric"><div class="label">Sources enabled</div><div class="value" id="m-sources">—</div></div>
+  </div>
+  <div class="panel">
+    <h2>Alive by type</h2>
+    <div class="breakdown" id="breakdown"></div>
+  </div>
+  <div class="two">
+    <div class="panel">
+      <h2>Runs</h2>
+      <div id="runs"></div>
+      <div class="muted" style="font-size:13px;margin-top:10px" id="rate"></div>
+    </div>
+    <div class="panel">
+      <h2>Activity</h2>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</main>
+
+<!-- Sources -->
+<main class="page" id="view-sources" hidden>
+  <div class="hero">
+    <div><h1>Sources</h1><p>Pages and lists that publish proxies. Each one is fetched on every scrape; its share of the test budget follows its yield, the share of its tested proxies that worked.</p></div>
+  </div>
+  <div class="panel">
+    <h2>Add sources</h2>
+    <div class="toolbar" style="margin:0">
+      <label class="field" style="flex:1 1 420px">One URL or domain per line
+        <textarea id="add-urls" rows="3" placeholder="https://example.com/proxies/socks5.txt"></textarea></label>
+      <button class="btn primary" id="add-button">Add</button>
+    </div>
+  </div>
+  <div class="toolbar">
+    <label class="field">Search<input id="source-search" placeholder="Part of a URL" style="width:260px"></label>
+    <span class="spacer"></span>
+    <span class="count" id="source-count"></span>
+    <button class="btn small" data-bulk="enable">Enable</button>
+    <button class="btn small" data-bulk="disable">Disable</button>
+    <button class="btn small" id="disable-failing">Disable failing/empty</button>
+    <button class="btn small danger" data-bulk="delete">Delete</button>
+  </div>
+  <div class="table-wrap"><table id="sources-table"></table></div>
+</main>
+
+<!-- Proxies -->
+<main class="page" id="view-proxies" hidden>
+  <div class="hero">
+    <div><h1>Proxies</h1><p>Working proxies, fastest first. Programs read the same list from the API with a key.</p></div>
+  </div>
+  <div class="toolbar">
+    <div class="field" style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)">Protocol
+      <div class="checks" id="f-protocol"></div></div>
+    <div class="field" style="display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--muted)">Anonymity
+      <div class="checks" id="f-anonymity"></div></div>
+    <label class="field">Country<input id="f-country" placeholder="US,DE" style="width:100px"></label>
+    <label class="field">Max latency ms<input id="f-latency" type="number" min="1" style="width:120px"></label>
+    <label class="field">Limit<input id="f-limit" type="number" min="1" max="50000" value="1000" style="width:100px"></label>
+    <button class="btn primary" id="apply">Apply</button>
+    <span class="spacer"></span>
+    <button class="btn small" data-export="0">Export ip:port</button>
+    <button class="btn small" data-export="1">Export with protocol</button>
+  </div>
+  <div class="count" id="proxy-count" style="margin-bottom:8px"></div>
+  <div class="table-wrap"><table id="proxies-table"></table></div>
+</main>
+
+<!-- API keys -->
+<main class="page" id="view-keys" hidden>
+  <div class="hero">
+    <div><h1>API keys</h1><p>Programs read proxies from the API with a key. Only a hash is stored, so a key is shown once, when it is created or rotated.</p></div>
+    <span class="spacer"></span>
+    <button class="btn primary" id="new-key">New key</button>
+  </div>
+  <div class="panel">
+    <h2>Use the API
+      <label class="chip" style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:500">
+        <input type="checkbox" id="auth-required"> Require a key</label></h2>
+    <pre class="code" id="usage"></pre>
+  </div>
+  <div class="table-wrap"><table id="keys-table"></table></div>
+</main>
+
+<!-- Settings -->
+<main class="page" id="view-settings" hidden>
+  <div class="hero">
+    <div><h1>Settings</h1><p>Applied within a few seconds. Changing the image or the machine sizes updates the two pools.</p></div>
+    <span class="spacer"></span>
+    <span class="count" id="dirty"></span>
+    <button class="btn" id="reload-settings">Reload</button>
+    <button class="btn primary" id="save-settings">Save</button>
+  </div>
+  <div class="settings" id="settings"></div>
+</main>
+
+<dialog id="dialog"></dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+const escape = value => String(value ?? "").replace(/[&<>"']/g, c =>
+  ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const fmt = n => n == null ? "—" : Number(n).toLocaleString();
+const parseTs = ts => ts ? Date.parse(ts.replace(" ", "T") + (ts.endsWith("Z") ? "" : "Z")) : null;
+function ago(ts) {
+  const ms = parseTs(ts);
+  if (!ms) return "";
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  return s < 60 ? `${Math.floor(s)}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago`
+    : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`;
+}
+const local = ts => ts ? new Date(parseTs(ts)).toLocaleString() : "";
+const pill = (state, text) => `<span class="pill ${escape(state)}"><span class="dot"></span>${escape(text ?? state)}</span>`;
+const API_BASE = new URL(location.pathname.replace(/\/gui\/app\/?$/, "/api/"), location.origin).href;
+
+async function api(method, path, body) {
+  const response = await fetch(`api/${path}`, {method, headers: {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  const text = await response.text();
+  let data = text;
+  try { data = text ? JSON.parse(text) : null; } catch {}
+  if (!response.ok) throw new Error(data?.error || response.statusText);
+  return data;
+}
+let toastTimer;
+function toast(message, error = false) {
+  document.querySelector(".toast")?.remove();
+  const node = document.createElement("div");
+  node.className = `toast${error ? " error" : ""}`;
+  node.textContent = message;
+  document.body.append(node);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => node.remove(), 3500);
+}
+async function act(action, success) {
+  try { const out = await action(); if (success) toast(typeof success === "function" ? success(out) : success); return out; }
+  catch (error) { toast(error.message, true); }
+}
+
+// --- Sortable tables ---------------------------------------------------------------
+// columns: {key, label, num, cls, render(row), sort(row)}
+function table(node, columns, rows, state, options = {}) {
+  const value = (row, column) => column.sort ? column.sort(row) : row[column.key];
+  if (state.key) {
+    const column = columns.find(c => c.key === state.key);
+    if (column) rows = [...rows].sort((a, b) => {
+      const x = value(a, column), y = value(b, column);
+      const order = x == null ? 1 : y == null ? -1 : x < y ? -1 : x > y ? 1 : 0;
+      return state.desc ? -order : order;
+    });
+  }
+  const select = options.select;
+  const head = (select ? `<th class="nosort"><input type="checkbox" data-all></th>` : "") + columns.map(c =>
+    `<th data-key="${c.key}" class="${c.num ? "num" : ""} ${state.key === c.key ? "sorted" : ""}">${escape(c.label)}${
+      state.key === c.key ? (state.desc ? " ↓" : " ↑") : ""}</th>`).join("");
+  const body = rows.length ? rows.map(row => `<tr data-id="${escape(row.id ?? "")}" class="${select?.has(row.id) ? "selected" : ""}">` +
+    (select ? `<td><input type="checkbox" data-id="${row.id}" ${select.has(row.id) ? "checked" : ""}></td>` : "") +
+    columns.map(c => `<td class="${c.num ? "num" : ""} ${c.cls || ""}" ${c.title ? `title="${escape(c.title(row))}"` : ""}>${
+      c.render ? c.render(row) : escape(row[c.key] ?? "")}</td>`).join("") + "</tr>").join("")
+    : `<tr><td colspan="${columns.length + (select ? 1 : 0)}" class="muted">${options.empty || "Nothing here yet"}</td></tr>`;
+  node.innerHTML = `<thead><tr>${head}</tr></thead><tbody>${body}</tbody>`;
+  node.querySelectorAll("th[data-key]").forEach(th => th.onclick = () => {
+    state.desc = state.key === th.dataset.key ? !state.desc : true;
+    state.key = th.dataset.key;
+    options.redraw();
+  });
+  if (select) {
+    node.querySelector("[data-all]").checked = rows.length > 0 && rows.every(row => select.has(row.id));
+    node.querySelector("[data-all]").onchange = event => {
+      rows.forEach(row => event.target.checked ? select.add(row.id) : select.delete(row.id));
+      options.redraw();
+    };
+    node.querySelectorAll("td input[data-id]").forEach(box => box.onchange = () => {
+      const id = Number(box.dataset.id);
+      box.checked ? select.add(id) : select.delete(id);
+      box.closest("tr").classList.toggle("selected", box.checked);
+      options.changed?.();
+    });
+  }
+}
+
+// --- Dashboard ---------------------------------------------------------------------
+const BREAKDOWN = [["http", "HTTP"], ["https", "HTTPS"], ["socks4", "SOCKS4"], ["socks5", "SOCKS5"],
+  ["elite", "Elite"], ["anonymous", "Anonymous"], ["transparent", "Transparent"], ["fast", "Under 2 s"]];
+
+function runLine(label, run, active) {
+  if (!run) return `<div class="run"><div class="what">${label}</div>${pill("empty", "never")}</div>`;
+  const s = run.summary || {};
+  const status = active ? "running" : run.status;
+  let detail = "";
+  if (run.kind === "scrape") detail = `${fmt(s.sources)} sources · ${fmt(s.found)} found · ${fmt(s.new)} new · ${fmt(s.errors)} failed`;
+  else detail = `${fmt(s.tested)} tested · ${fmt(s.alive)} alive · ${fmt(s.dead)} dead` + (s.inconclusive ? ` · ${s.inconclusive} discarded` : "");
+  if (run.status === "running") detail = "In progress";
+  if (s.error) detail = s.error;
+  const when = run.finished_at ? `finished ${ago(run.finished_at)}${s.seconds != null ? ` in ${s.seconds}s` : ""}` : `started ${ago(run.started_at)}`;
+  return `<div class="run"><div class="what">${label}</div><div>${pill(status, status)}
+    <div class="detail" style="margin-top:6px">${escape(detail)}</div><div class="detail">${escape(when)}</div></div></div>`;
+}
+
+async function loadDashboard() {
+  const data = await api("GET", "overview");
+  const st = data.stats, sch = data.scheduler || {};
+  $("m-alive").textContent = fmt(st.proxies.alive);
+  $("m-new").textContent = fmt(st.proxies.new);
+  $("m-dead").textContent = fmt(st.proxies.dead);
+  $("m-sources").textContent = `${fmt(st.sources.enabled)} / ${fmt(st.sources.total)}`;
+  $("breakdown").innerHTML = BREAKDOWN.map(([key, label]) =>
+    `<div><span>${label}</span><b>${fmt(key === "fast" ? st.fast : st.alive[key])}</b></div>`).join("");
+  $("runs").innerHTML = runLine("Scrape", data.runs.scrape, sch.scraping) + runLine("Test", data.runs.test, sch.testing);
+  $("rate").textContent = `Tester rate: ${sch.rate || "–"} new connections/s (max ${data.rate.max}, learned ceiling ${data.rate.ceiling || "none"})`;
+  $("log").innerHTML = data.events.map(e => `<div><span class="ts" title="${escape(local(e.ts))}">${escape(ago(e.ts))}</span>
+    <span class="${escape(e.level)}">${escape(e.level)}</span><span>${escape(e.message)}</span></div>`).join("");
+  $("health").innerHTML = sch.setup_error ? `${pill("error", "pools")} <span title="${escape(sch.setup_error)}">${escape(sch.setup_error.slice(0, 80))}</span>`
+    : sch.ready ? pill("ok", "pools ready") : pill("running", "setting up pools");
+}
+document.querySelectorAll("[data-run]").forEach(button => button.onclick = () =>
+  act(() => api("POST", "run", {kind: button.dataset.run}),
+      `${button.dataset.run === "scrape" ? "Scrape" : "Test round"} requested; it starts within a few seconds`));
+
+// --- Sources -------------------------------------------------------------------------
+let sources = [];
+const sourceSort = {key: "alive_now", desc: true}, selected = new Set();
+const SOURCE_COLUMNS = [
+  {key: "url", label: "URL", cls: "url mono", title: r => r.url},
+  {key: "enabled", label: "On", render: r => pill(r.enabled ? "yes" : "no", r.enabled ? "on" : "off")},
+  {key: "last_status", label: "Scrape", render: r => r.last_status ? pill(r.last_status) : ""},
+  {key: "last_found", label: "Found", num: true, render: r => fmt(r.last_found)},
+  {key: "listed", label: "Listed", num: true, render: r => fmt(r.listed)},
+  {key: "tested", label: "Tested", num: true, render: r => fmt(r.tested)},
+  {key: "pending", label: "Pending", num: true, render: r => fmt(r.pending)},
+  {key: "yield_pct", label: "Yield", num: true, sort: r => r.yield_pct ?? -1,
+   render: r => r.yield_pct == null ? "" : `${r.yield_pct.toFixed(1)}%`},
+  {key: "alive_now", label: "Alive", num: true, render: r => fmt(r.alive_now)},
+  {key: "last_budget", label: "Budget", num: true, render: r => fmt(r.last_budget)},
+  {key: "last_scraped_at", label: "Scraped", render: r => escape(ago(r.last_scraped_at)), title: r => local(r.last_scraped_at)},
+  {key: "note", label: "Error / disabled reason", cls: "note", sort: r => r.disabled_reason || r.last_error || "",
+   render: r => escape((r.disabled_reason || r.last_error || "").slice(0, 200)), title: r => r.disabled_reason || r.last_error || ""},
+];
+function drawSources() {
+  const known = new Set(sources.map(s => s.id));
+  [...selected].forEach(id => known.has(id) || selected.delete(id));
+  table($("sources-table"), SOURCE_COLUMNS, sources, sourceSort,
+        {select: selected, redraw: drawSources, changed: countSources, empty: "No sources yet: add the lists you want scraped above"});
+  countSources();
+}
+function countSources() {
+  const on = sources.filter(s => s.enabled).length;
+  $("source-count").textContent = `${fmt(sources.length)} sources · ${fmt(on)} enabled` + (selected.size ? ` · ${selected.size} selected` : "");
+}
+async function loadSources() {
+  sources = await api("GET", `sources?search=${encodeURIComponent($("source-search").value.trim())}`);
+  drawSources();
+}
+let searchTimer;
+$("source-search").oninput = () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadSources, 250); };
+$("add-button").onclick = () => act(async () => {
+  const out = await api("POST", "sources", {urls: $("add-urls").value});
+  $("add-urls").value = "";
+  await loadSources();
+  return out;
+}, out => `Added ${out.added} sources; they are scraped on the next run`);
+document.querySelectorAll("[data-bulk]").forEach(button => button.onclick = () => {
+  const action = button.dataset.bulk, ids = [...selected];
+  if (!ids.length) return toast("Select sources first", true);
+  if (action === "delete" && !confirm(`Delete ${ids.length} sources? Their listings are removed too.`)) return;
+  act(async () => { const out = await api("POST", `sources/${action}`, {ids}); if (action === "delete") selected.clear(); await loadSources(); return out; },
+      out => `${action[0].toUpperCase() + action.slice(1)}d ${out.changed} sources`);
+});
+$("disable-failing").onclick = () => act(async () => { const out = await api("POST", "sources/disable-failing"); await loadSources(); return out; },
+  out => `Disabled ${out.changed} failing or empty sources`);
+
+// --- Proxies -------------------------------------------------------------------------
+let proxies = [];
+const proxySort = {key: "latency_ms", desc: false};
+const PROXY_COLUMNS = [
+  {key: "url", label: "Proxy", cls: "mono", render: r => escape(`${r.ip}:${r.port}`)},
+  {key: "protocol", label: "Protocol"},
+  {key: "https", label: "HTTPS", render: r => r.https ? pill("yes", "yes") : ""},
+  {key: "anonymity", label: "Anonymity"},
+  {key: "latency_ms", label: "Latency ms", num: true, render: r => fmt(r.latency_ms)},
+  {key: "country", label: "Country"},
+  {key: "exit_ip", label: "Exit IP", cls: "mono"},
+  {key: "uptime", label: "Uptime", num: true, sort: r => r.checks ? r.successes / r.checks : -1,
+   render: r => r.checks ? `${Math.min(100, Math.round(100 * r.successes / r.checks))}%` : ""},
+  {key: "checks", label: "Checks", num: true},
+  {key: "last_checked", label: "Checked", render: r => escape(ago(r.last_checked)), title: r => local(r.last_checked)},
+];
+const checks = (id, values) => $(id).innerHTML = values.map(v =>
+  `<label class="chip"><input type="checkbox" value="${v}">${v}</label>`).join("");
+checks("f-protocol", ["http", "https", "socks4", "socks5"]);
+checks("f-anonymity", ["elite", "anonymous", "transparent"]);
+function proxyQuery() {
+  const picked = id => [...$(id).querySelectorAll("input:checked")].map(i => i.value).join(",");
+  const params = new URLSearchParams();
+  const add = (k, v) => v && params.set(k, v);
+  add("protocol", picked("f-protocol")); add("anonymity", picked("f-anonymity"));
+  add("country", $("f-country").value.trim()); add("max_latency", $("f-latency").value);
+  add("limit", $("f-limit").value || "1000");
+  return params;
+}
+function drawProxies() { table($("proxies-table"), PROXY_COLUMNS, proxies, proxySort, {redraw: drawProxies, empty: "No working proxies match"}); }
+async function loadProxies() {
+  proxies = await api("GET", `browse?${proxyQuery()}`);
+  $("proxy-count").textContent = `${fmt(proxies.length)} proxies`;
+  drawProxies();
+}
+$("apply").onclick = () => act(loadProxies);
+document.querySelectorAll("[data-export]").forEach(button => button.onclick = () => act(async () => {
+  const params = proxyQuery();
+  params.set("format", "txt");
+  if (button.dataset.export === "1") params.set("scheme", "1");
+  const text = await api("GET", `browse?${params}`);
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([text], {type: "text/plain"}));
+  link.download = button.dataset.export === "1" ? "proxies-with-protocol.txt" : "proxies.txt";
+  link.click();
+  URL.revokeObjectURL(link.href);
+}));
+
+// --- API keys ------------------------------------------------------------------------
+let keys = [];
+const keySort = {key: "id", desc: false};
+const KEY_COLUMNS = [
+  {key: "name", label: "Name"},
+  {key: "prefix", label: "Key", cls: "mono", render: r => escape(r.prefix + "…")},
+  {key: "status", label: "Status", render: r => pill(r.status)},
+  {key: "created_at", label: "Created", render: r => escape(local(r.created_at))},
+  {key: "expires_at", label: "Expires", render: r => escape(r.expires_at ? local(r.expires_at) : "never")},
+  {key: "last_used_at", label: "Last used", render: r => escape(ago(r.last_used_at) || "never")},
+  {key: "rotated_at", label: "Rotated", render: r => escape(ago(r.rotated_at)) +
+     (r.old_key_valid_until ? ` <span class="muted">(old key until ${escape(local(r.old_key_valid_until))})</span>` : "")},
+  {key: "actions", label: "", render: r => `<div class="actions">
+     <button class="btn small" data-key-action="rotate" data-id="${r.id}">Rotate</button>
+     <button class="btn small" data-key-action="${r.enabled ? "disable" : "enable"}" data-id="${r.id}">${r.enabled ? "Disable" : "Enable"}</button>
+     <button class="btn small danger" data-key-action="delete" data-id="${r.id}">Delete</button></div>`},
+];
+function drawKeys() {
+  table($("keys-table"), KEY_COLUMNS, keys, keySort, {redraw: drawKeys, empty: "No keys yet"});
+  $("keys-table").querySelectorAll("[data-key-action]").forEach(button => button.onclick = () => keyAction(button.dataset.keyAction, Number(button.dataset.id)));
+}
+async function loadKeys() {
+  const data = await api("GET", "keys");
+  keys = data.keys;
+  $("auth-required").checked = data.auth_required;
+  $("usage").textContent = `curl ${data.auth_required ? '-H "Authorization: Bearer <key>" ' : ""}"${API_BASE}proxies?protocol=socks5&limit=20&format=txt"\n\n` +
+    `GET ${API_BASE}proxies          filters: protocol, anonymity, country, max_latency, checked_within, limit, sort, format=json|txt, scheme\n` +
+    `GET ${API_BASE}proxies/random   one working proxy, same filters\n` +
+    `GET ${API_BASE}stats            counts`;
+  drawKeys();
+}
+$("auth-required").onchange = event => act(() => api("PUT", "settings", {api_auth_required: event.target.checked}),
+  event.target.checked ? "The API now needs a key" : "The API is now open to anyone who can reach the controller").then(loadKeys);
+function dialog(html) { $("dialog").innerHTML = html; $("dialog").showModal(); return $("dialog"); }
+function showKey(title, key) {
+  dialog(`<div class="dlg-head"><h2>${escape(title)}</h2><p>Copy it now. Only a hash is stored, so it cannot be shown again.</p></div>
+    <div class="dlg-body"><pre class="code" id="new-key-value">${escape(key)}</pre>
+    <div class="muted">Send it as <span class="mono">Authorization: Bearer &lt;key&gt;</span></div></div>
+    <div class="dlg-foot"><span class="spacer"></span><button class="btn" id="copy-key">Copy</button><button class="btn primary" id="done">Done</button></div>`);
+  $("copy-key").onclick = () => navigator.clipboard.writeText(key).then(() => toast("Copied"), () => toast("Select the key and copy it", true));
+  $("done").onclick = () => $("dialog").close();
+}
+$("new-key").onclick = () => {
+  dialog(`<div class="dlg-head"><h2>New API key</h2></div><div class="dlg-body">
+    <label class="field">Name<input id="key-name" placeholder="scraper on box 3"></label>
+    <label class="field">Expires<select id="key-days"><option value="0">Never</option><option value="30">In 30 days</option>
+      <option value="90">In 90 days</option><option value="365">In 1 year</option></select></label></div>
+    <div class="dlg-foot"><span class="spacer"></span><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="create">Create</button></div>`);
+  $("cancel").onclick = () => $("dialog").close();
+  $("create").onclick = () => act(async () => {
+    const out = await api("POST", "keys", {name: $("key-name").value, days: Number($("key-days").value)});
+    await loadKeys();
+    showKey("Your new API key", out.key);
+  });
+};
+function keyAction(action, id) {
+  const key = keys.find(k => k.id === id);
+  if (action === "rotate") {
+    dialog(`<div class="dlg-head"><h2>Rotate ${escape(key.name)}</h2><p>A new secret replaces the current one. Name, expiry and status stay the same.</p></div>
+      <div class="dlg-body"><label class="field">The old key stops working<select id="grace"><option value="0">Immediately</option>
+        <option value="60">After 1 hour</option><option value="1440">After 24 hours</option><option value="10080">After 7 days</option></select></label></div>
+      <div class="dlg-foot"><span class="spacer"></span><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="rotate">Rotate</button></div>`);
+    $("cancel").onclick = () => $("dialog").close();
+    $("rotate").onclick = () => act(async () => {
+      const out = await api("POST", `keys/${id}/rotate`, {grace_minutes: Number($("grace").value)});
+      await loadKeys();
+      showKey(`New secret for ${key.name}`, out.key);
+    });
+  } else if (action === "delete") {
+    if (confirm(`Delete key ${key.name}? Programs using it stop working.`))
+      act(async () => { await api("DELETE", `keys/${id}`); await loadKeys(); }, "Key deleted");
+  } else {
+    act(async () => { await api("PUT", `keys/${id}`, {enabled: action === "enable"}); await loadKeys(); }, `Key ${action}d`);
+  }
+}
+
+// --- Settings ------------------------------------------------------------------------
+const GROUPS = [
+  ["Schedule", [["scraping_enabled", "Scraping"], ["testing_enabled", "Testing"], ["scrape_interval_min", "Scrape interval", "min"],
+    ["test_round_pause_s", "Pause between rounds", "s"], ["recheck_alive_min", "Re-test alive after", "min"]]],
+  ["Scraper", [["scrape_batch_size", "Batch size", "URLs"], ["scrape_parallel", "Parallel tasks"], ["scrape_timeout_s", "Fetch timeout", "s"]]],
+  ["Source scoring", [["source_trial_size", "Trial size"], ["source_min_share", "Minimum budget share"],
+    ["source_auto_disable", "Auto-disable sources"], ["source_disable_fail_streak", "Failures before disabling"]]],
+  ["Tester", [["test_round_max", "Proxies per round"], ["test_batch_size", "Batch size"], ["test_concurrency", "Concurrency"],
+    ["test_parallel", "Parallel tasks"], ["test_timeout_s", "Check timeout", "s"]]],
+  ["Rate limiting", [["test_rate_min", "Start rate", "/s"], ["test_rate_max", "Max rate", "/s"],
+    ["test_rate_ceiling", "Learned ceiling", "/s"], ["network_backoff_s", "Backoff", "s"]]],
+  ["Retention", [["retention_unlisted_days", "Forget dead after", "days"], ["retention_new_unlisted_hours", "Forget untested after", "h"],
+    ["retention_dead_retest_days", "Re-test dead after", "days"]]],
+  ["Check targets", [["judges", "Judge URLs"], ["https_test_url", "HTTPS check URL"]]],
+];
+const CLUSTER = [["cpu", "CPU cores"], ["memory_mib", "Memory MiB"], ["warm", "Warm microVMs"], ["max_instances", "Max microVMs"]];
+let saved = {}, meta = {}, images = [];
+function control(item) {
+  const id = `s-${item.key}`;
+  if (item.type === "bool") return `<input type="checkbox" id="${id}" data-setting="${item.key}">`;
+  if (item.key === "judges") return `<textarea id="${id}" data-setting="${item.key}"></textarea>`;
+  if (item.key === "image") return `<select id="${id}" data-setting="image">${images.map(i =>
+    `<option value="${escape(i.name)}">${escape(i.name)}</option>`).join("")}</select>`;
+  const step = item.type === "float" ? "any" : "1";
+  return `<input id="${id}" data-setting="${item.key}" ${item.type === "str" ? "" : `type="number" min="0" step="${step}"`}>`;
+}
+function readControl(node) { return node.type === "checkbox" ? node.checked : node.value; }
+function sameValue(key, value) {
+  const type = meta[key].type;
+  if (type === "bool") return Boolean(value) === Boolean(saved[key]);
+  if (type === "int" || type === "float") return value !== "" && Number(value) === Number(saved[key]);
+  return String(value).trim() === String(saved[key]);
+}
+function markDirty() {
+  let count = 0;
+  document.querySelectorAll("[data-setting]").forEach(node => {
+    const dirty = !sameValue(node.dataset.setting, readControl(node));
+    node.closest(".setting, .cluster-cell")?.classList.toggle("dirty", dirty);
+    count += dirty;
+  });
+  $("dirty").textContent = count ? `${count} unsaved change${count === 1 ? "" : "s"}` : "All changes saved";
+  return count;
+}
+async function loadSettings() {
+  const [list, imageList] = await Promise.all([api("GET", "settings"), api("GET", "images")]);
+  images = imageList.filter(i => i.ready);
+  meta = Object.fromEntries(list.map(item => [item.key, item]));
+  saved = Object.fromEntries(list.map(item => [item.key, item.value]));
+  if (!images.some(i => i.name === saved.image || i.id === saved.image)) images.unshift({name: saved.image});
+  const row = (key, label, suffix) => {
+    const item = meta[key];
+    return `<div class="setting ${key === "judges" ? "wide" : ""}"><div class="name">${escape(label)}</div>
+      <div class="control">${control(item)}${suffix ? `<span class="suffix">${escape(suffix)}</span>` : ""}</div>
+      <div class="hint">${escape(item.description)}</div></div>`;
+  };
+  $("settings").innerHTML = GROUPS.map(([title, fields]) => `<div class="panel"><h2>${title}</h2>${
+    fields.map(([key, label, suffix]) => row(key, label, suffix)).join("")}</div>`).join("") +
+    `<div class="panel"><h2>Scraperack pools</h2>${row("image", "Image")}
+      <div class="cluster" style="margin-top:12px"><span></span><span class="head">Scraper</span><span class="head">Tester</span>
+      ${CLUSTER.map(([field, label]) => `<span>${label}</span>` + ["scraper", "tester"].map(role =>
+        `<span class="cluster-cell">${control(meta[`${role}_${field}`])}</span>`).join("")).join("")}</div>
+      <div class="muted" style="font-size:12.5px;margin-top:10px">Pools <span class="mono">proxies-scraper</span> and
+        <span class="mono">proxies-tester</span>. The image needs Python 3 and must be imported from Docker; packages are installed into a disk built from it.</div></div>`;
+  for (const [key, value] of Object.entries(saved)) {
+    const node = document.querySelector(`[data-setting="${key}"]`);
+    if (!node) continue;
+    if (node.type === "checkbox") node.checked = value; else node.value = value;
+  }
+  document.querySelectorAll("[data-setting]").forEach(node => node.oninput = node.onchange = markDirty);
+  markDirty();
+}
+$("reload-settings").onclick = () => act(loadSettings);
+$("save-settings").onclick = () => act(async () => {
+  const changed = {};
+  document.querySelectorAll("[data-setting]").forEach(node => {
+    const value = readControl(node);
+    if (!sameValue(node.dataset.setting, value)) changed[node.dataset.setting] = value;
+  });
+  if (!Object.keys(changed).length) return {saved: 0};
+  const out = await api("PUT", "settings", changed);
+  await loadSettings();
+  return out;
+}, out => out.saved ? `Saved ${out.saved} settings` : "Nothing changed");
+
+// --- Views ---------------------------------------------------------------------------
+const VIEWS = {dashboard: loadDashboard, sources: loadSources, proxies: loadProxies, keys: loadKeys, settings: loadSettings};
+let view = "dashboard";
+function show() {
+  const name = location.hash.replace(/^#\/?/, "") || "dashboard";
+  view = VIEWS[name] ? name : "dashboard";
+  for (const key of Object.keys(VIEWS)) $(`view-${key}`).hidden = key !== view;
+  document.querySelectorAll(".nav a").forEach(a => a.classList.toggle("on", a.dataset.view === view));
+  act(VIEWS[view]);
+}
+window.addEventListener("hashchange", show);
+show();
+setInterval(() => {
+  if (document.hidden || $("dialog").open) return;
+  if (view === "dashboard") act(loadDashboard);
+  else if (view === "sources" && !$("source-search").matches(":focus")) loadSources().catch(() => {});
+}, 5000);
+</script>
+</body>
+</html>
