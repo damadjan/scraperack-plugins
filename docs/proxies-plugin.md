@@ -72,14 +72,17 @@ under the same `/plugins/proxies/api/` and need no key, like the rest of the con
 **Scraper.** Every `scrape_interval_min`, enabled sources are split into batches and fetched in
 `proxies-scraper` microVMs with curl-cffi (Chrome impersonation). The parser handles `ip:port`
 lists, `scheme://ip:port`, HTML tables, JSON APIs and base64-encoded IPs. A protocol hint is
-taken from the URL (`socks5.txt`) or the list itself. Sources that keep failing to scrape, or
-yield nothing after their trial, are disabled (the reason is shown; **Enable** resets it).
+taken from the URL (`socks5.txt`) or the list itself. Sources that fail to scrape
+`source_disable_fail_streak` (3) times in a row, or yield nothing after their trial, are
+disabled (the reason is shown; **Enable** resets it). A source that has yielded working proxies
+is only disabled after `source_disable_fail_streak_proven` (48, about a day) errors in a row.
 
 **Tester.** Each round re-checks stale alive proxies first, then fills the rest of
 `test_round_max` with untested proxies split across sources: a new source gets a trial
 (`source_trial_size` of its proxies), after which its share follows its yield, with a floor of
 `source_min_share`. Within a source, what it lists right now goes first, then proxies listed by
-several sources, then the most recently discovered. Each check opens one plain TCP connection
+several sources, then the most recently discovered. Leftover budget goes to dead proxies that
+once worked (see below). Each check opens one plain TCP connection
 first (most dead proxies stop there), then tries HTTP, SOCKS5 and SOCKS4 through a judge to
 learn the protocol, latency, exit IP and anonymity, and a CONNECT to `https_test_url`.
 Countries come from the free DB-IP Lite database, downloaded monthly.
@@ -88,8 +91,11 @@ Countries come from the free DB-IP Lite database, downloaded monthly.
 the tester starts at `test_rate_min` connections/s across the cluster and ramps up about 8% a
 minute to `test_rate_max`. Scraping and testing never run at the same time.
 
-**Dead is final while listed.** A proxy that fails a test is not tested again while any source
-still lists it, so a re-scrape cannot bring it back. Because of that, a batch is thrown away
+**Dead proxies.** A proxy that never worked and fails its test is not tested again while any
+source still lists it, so a re-scrape cannot bring it back. Free proxies often fail one check and
+come back, so a proxy that has worked before and is still listed is re-tested
+`recheck_dead_min` (60) minutes after it fails, the wait doubling after each failed re-test up to
+`recheck_dead_max_hours` (24). Because failures stick, a batch is thrown away
 (nothing marked dead) if the microVM's own direct "canary" connections fail while it runs;
 the tester then halves its rate, sets a learned ceiling at 80% of the rate that failed, and
 pauses for `network_backoff_s`.

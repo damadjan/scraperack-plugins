@@ -355,11 +355,13 @@ class Scheduler:
         run_id = store.start_run("test")
         started = time.monotonic()
         judges = [j.strip() for j in cfg["judges"].splitlines() if j.strip()]
-        items = [[p["id"], p["ip"], p["port"], p["hint"], p["protocol"] if p["status"] == "alive" else None]
+        items = [[p["id"], p["ip"], p["port"], p["hint"], p["protocol"] if p["status"] != "new" else None]
                  for p in picked]
+        dead_due = sum(p["status"] == "dead" for p in picked)
         totals = {"tested": 0, "alive": 0, "dead": 0, "batch_failures": 0, "inconclusive": 0, "real_ip": None}
         store.log("info", f"Test round started: {len(items)} proxies "
-                          f"({alive_due} alive re-checks, {len(items) - alive_due} new)")
+                          f"({alive_due} alive re-checks, {len(items) - alive_due - dead_due} new, "
+                          f"{dead_due} dead re-tests)")
         abort = threading.Event()
         guard = threading.Lock()
         ceiling = cfg["test_rate_ceiling"] or cfg["test_rate_max"]
@@ -435,7 +437,7 @@ class Scheduler:
                 store.log("warn", "No judge answered directly; transparent proxies cannot be detected. "
                                   "Check the judge URLs.")
             store.log("info", f"Test round done in {totals['seconds']}s: {totals['tested']} tested, "
-                              f"{totals['alive']} alive, {totals['dead']} dead (final)"
+                              f"{totals['alive']} alive, {totals['dead']} dead"
                               + (f", {totals['inconclusive']} batches discarded" if totals["inconclusive"] else ""))
         except Exception as error:
             traceback.print_exc()

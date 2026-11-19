@@ -584,16 +584,18 @@ function keyAction(action, id) {
 // --- Settings ------------------------------------------------------------------------
 const GROUPS = [
   ["Schedule", [["scraping_enabled", "Scraping"], ["testing_enabled", "Testing"], ["scrape_interval_min", "Scrape interval", "min"],
-    ["test_round_pause_s", "Pause between rounds", "s"], ["recheck_alive_min", "Re-test alive after", "min"]]],
+    ["test_round_pause_s", "Pause between rounds", "s"], ["recheck_alive_min", "Re-test alive after", "min"],
+    ["recheck_dead_min", "Re-test once-working dead after", "min"], ["recheck_dead_max_hours", "Longest dead re-test wait", "h"]]],
   ["Scraper", [["scrape_batch_size", "Batch size", "URLs"], ["scrape_parallel", "Parallel tasks"], ["scrape_timeout_s", "Fetch timeout", "s"]]],
   ["Source scoring", [["source_trial_size", "Trial size"], ["source_min_share", "Minimum budget share"],
-    ["source_auto_disable", "Auto-disable sources"], ["source_disable_fail_streak", "Failures before disabling"]]],
+    ["source_auto_disable", "Auto-disable sources"], ["source_disable_fail_streak", "Failures before disabling"],
+    ["source_disable_fail_streak_proven", "Failures before disabling a proven source"]]],
   ["Tester", [["test_round_max", "Proxies per round"], ["test_batch_size", "Batch size"], ["test_concurrency", "Concurrency"],
     ["test_parallel", "Parallel tasks"], ["test_timeout_s", "Check timeout", "s"]]],
   ["Rate limiting", [["test_rate_min", "Start rate", "/s"], ["test_rate_max", "Max rate", "/s"],
     ["test_rate_ceiling", "Learned ceiling", "/s"], ["network_backoff_s", "Backoff", "s"]]],
   ["Retention", [["retention_unlisted_days", "Forget dead after", "days"], ["retention_new_unlisted_hours", "Forget untested after", "h"],
-    ["retention_dead_retest_days", "Re-test dead after", "days"]]],
+    ["retention_dead_retest_days", "Forget listed dead after", "days"]]],
   ["Check targets", [["judges", "Judge URLs"], ["https_test_url", "HTTPS check URL"]]],
 ];
 const CLUSTER = [["cpu", "CPU cores"], ["memory_mib", "Memory MiB"], ["warm", "Warm microVMs"], ["max_instances", "Max microVMs"]];
