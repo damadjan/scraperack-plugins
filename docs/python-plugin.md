@@ -55,6 +55,9 @@ Functions are pickled by value with cloudpickle, so the calling program must run
 Python minor version as the environment's image (for example 3.10 with 3.10). A mismatch
 fails with errors like `code expected at most 16 arguments, got 18`.
 
+Image build contexts (Python 3.10): [`python-runtime`](../python/images/python-runtime)
+and [`python-requests-runtime`](../python/images/python-requests-runtime) (adds `requests`).
+
 ## API
 
 Served at `http://<controller>:7070/plugins/python/api/`:
