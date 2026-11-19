@@ -65,6 +65,16 @@ def _cache_dns():
     socket.getaddrinfo = getaddrinfo
 
 
+def _verified_context():
+    """A certificate-checking SSL context, with certifi's CAs when installed (curl-cffi brings it)."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
 async def _read(response):
     return (await response.content.read(MAX_BODY)).decode('utf-8', errors='replace')
 
@@ -84,6 +94,9 @@ async def _test_all(items, judges, https_url, timeout, concurrency, rate):
     asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(32))
 
     client_timeout = aiohttp.ClientTimeout(total=timeout, sock_connect=min(timeout, 6))
+    # The HTTPS check verifies the site's certificate: a proxy that intercepts TLS (its own
+    # self-signed or unknown CA) breaks every real client, so it doesn't count as HTTPS.
+    https_ssl = _verified_context()
 
     async def direct_ip():
         """Our own egress IP via a judge, or None if no judge is reachable without a proxy."""
@@ -112,7 +125,8 @@ async def _test_all(items, judges, https_url, timeout, concurrency, rate):
         latency = int((time.monotonic() - started) * 1000)
         https = False
         try:
-            async with session.get(https_url, headers=UA, proxy=proxy_url, allow_redirects=False) as response:
+            async with session.get(https_url, headers=UA, proxy=proxy_url, allow_redirects=False,
+                                   ssl=https_ssl) as response:
                 await _read(response)
                 https = response.status < 400
         except Exception:
