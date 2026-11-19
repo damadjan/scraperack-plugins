@@ -5,6 +5,7 @@ warm microVMs, and an Executions view of every call with its output.
 
 ```text
 plugin/         the installable plugin (pack this folder)
+images/         Docker build contexts for Python images
 sdk/            scraperack-python, the SDK for this plugin
 examples/       SDK usage, one concept per file
 verification/   end-to-end checks and benchmarks
