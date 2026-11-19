@@ -57,6 +57,18 @@ class StoreTest(unittest.TestCase):
         store.set_sources_enabled([source], True)
         self.assertEqual(len(store.enabled_sources()), 1)
 
+    def test_proven_source_gets_more_slack(self):
+        store.add_sources(["https://big.example/list"])
+        source = store.enabled_sources()[0]["id"]
+        with store.write() as conn:
+            conn.execute("UPDATE sources SET tested = 500, ever_alive = 20 WHERE id = ?", (source,))
+        for _ in range(5):
+            self.scrape(source, [], ok=False)
+        self.assertEqual(store.refresh_source_stats(self.cfg), [])
+        with store.write() as conn:
+            conn.execute("UPDATE sources SET fail_streak = 48 WHERE id = ?", (source,))
+        self.assertEqual([d[0] for d in store.refresh_source_stats(self.cfg)], [source])
+
     def test_round_tests_and_yield(self):
         store.add_sources(["https://a.example/list"])
         source = store.enabled_sources()[0]["id"]
@@ -70,7 +82,7 @@ class StoreTest(unittest.TestCase):
         store.refresh_source_stats(self.cfg)
         row = store.list_sources()[0]
         self.assertEqual((row["tested"], row["ever_alive"], row["alive_now"], row["yield_pct"]), (10, 3, 3, 30.0))
-        # Dead proxies are final and alive ones are not due yet: nothing left to test.
+        # Dead proxies that never worked are final and alive ones are not due yet.
         self.assertEqual(store.pick_for_test(self.cfg), ([], 0))
         found = store.query_proxies(protocol="https", country="us", limit=2)
         self.assertEqual([p["latency_ms"] for p in found], [100, 101])
@@ -79,6 +91,36 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(store.stats()["proxies"], {"alive": 3, "new": 0, "dead": 7})
         with self.assertRaises(ValueError):
             store.query_proxies(protocol="ftp")
+
+    def test_dead_that_worked_is_retested_with_backoff(self):
+        store.add_sources(["https://a.example/list"])
+        source = store.enabled_sources()[0]["id"]
+        self.scrape(source, [["9.9.8.1", 8080, "http"], ["9.9.8.2", 8080, "http"]])
+        store.refresh_source_stats(self.cfg)
+        picked, _ = store.pick_for_test(self.cfg)
+        ok = {"ok": True, "protocol": "socks5", "https": False, "anonymity": "elite", "latency_ms": 50}
+        store.store_test_results([{**ok, "id": picked[0]["id"], "ip": picked[0]["ip"]},
+                                  {"id": picked[1]["id"], "ip": picked[1]["ip"], "ok": False}], lambda ip: None)
+        worked = picked[0]["id"]
+        store.store_test_results([{"id": worked, "ip": "x", "ok": False}], lambda ip: None)
+        self.assertEqual(store.pick_for_test(self.cfg), ([], 0))   # failed just now: not due yet
+
+        def age(minutes):
+            with store.write() as conn:
+                conn.execute("UPDATE proxies SET last_checked = ?", (store.ago_ts(minutes=minutes),))
+
+        age(61)
+        picked, alive_due = store.pick_for_test(self.cfg)
+        self.assertEqual(([p["id"] for p in picked], alive_due), ([worked], 0))
+        self.assertEqual((picked[0]["status"], picked[0]["protocol"]), ("dead", "socks5"))
+        store.store_test_results([{"id": worked, "ip": "x", "ok": False}], lambda ip: None)
+        age(61)   # second failed re-test: now waits 120 minutes
+        self.assertEqual(store.pick_for_test(self.cfg), ([], 0))
+        age(121)
+        self.assertEqual([p["id"] for p in store.pick_for_test(self.cfg)[0]], [worked])
+        store.store_test_results([{**ok, "id": worked, "ip": "x"}], lambda ip: None)
+        self.assertEqual(store.stats()["proxies"]["alive"], 1)
+        self.assertEqual(store.list_sources()[0]["ever_alive"], 1)   # a comeback is not counted twice
 
     def test_retention_forgets_unlisted_dead(self):
         store.add_sources(["https://a.example/list"])

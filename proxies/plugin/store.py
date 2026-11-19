@@ -1,7 +1,9 @@
 """SQLite storage: sources, proxies, who lists what, settings, runs, events and API keys.
 
-Proxy lifecycle: new -> alive <-> (re-checked) ... -> dead. A dead proxy is not tested again
-while sources keep listing it: its row stays so a re-scrape cannot bring it back as new. Once no
+Proxy lifecycle: new -> alive <-> (re-checked) ... -> dead. A dead proxy that never worked is
+not tested again while sources keep listing it: its row stays so a re-scrape cannot bring it
+back as new. One that did work is re-tested with a doubling backoff (recheck_dead_min up to
+recheck_dead_max_hours), since free proxies often fail a single check and come back. Once no
 source has listed it for `retention_unlisted_days` the row is deleted (see apply_retention), so
 the tables stay about as big as what the sources list now instead of growing forever.
 
@@ -122,6 +124,7 @@ DEFAULTS = {
     'source_min_share': ('0.02', float, 'Smallest share of the test budget an enabled source gets'),
     'source_auto_disable': ('1', bool, 'Disable sources that keep failing or never yield a working proxy'),
     'source_disable_fail_streak': ('3', int, 'Scrape errors in a row before a source is disabled'),
+    'source_disable_fail_streak_proven': ('48', int, 'Scrape errors in a row before a source that has yielded working proxies is disabled'),
     'test_round_pause_s': ('10', int, 'Pause between test rounds'),
     'test_round_max': ('3000', int, 'Proxies tested per round (alive re-checks first, then new by source yield)'),
     'test_batch_size': ('300', int, 'Max proxies per test task'),
@@ -133,6 +136,8 @@ DEFAULTS = {
     'network_backoff_s': ('300', int, 'Pause testing this long after network trouble'),
     'test_timeout_s': ('10', int, 'Per-check timeout'),
     'recheck_alive_min': ('15', int, 'Re-test alive proxies after this many minutes'),
+    'recheck_dead_min': ('60', int, 'Re-test dead proxies that once worked (and are still listed) after this many minutes, doubling after each failure (0 = never)'),
+    'recheck_dead_max_hours': ('24', int, 'Longest wait between re-tests of a dead proxy that once worked'),
     'retention_unlisted_days': ('3', int, 'Forget dead proxies (and source listings) no source has listed for this many days'),
     'retention_new_unlisted_hours': ('12', int, 'Forget untested proxies no source has listed for this many hours'),
     'retention_dead_retest_days': ('0', int, 'Forget dead proxies after this many days even if still listed (0 = never)'),
@@ -428,8 +433,12 @@ def refresh_source_stats(cfg):
                      'THEN ROUND(100.0 * ever_alive / tested, 2) ELSE NULL END')
         if cfg['source_auto_disable']:
             streak, trial = cfg['source_disable_fail_streak'], cfg['source_trial_size']
-            for row in conn.execute('SELECT id, url FROM sources WHERE enabled = 1 AND fail_streak >= ?', (streak,)):
-                disabled.append((row[0], row[1], f'{streak}+ scrape errors in a row'))
+            # A source that has yielded working proxies gets far more slack: big lists time out
+            # and hosts have bad hours, and losing a proven source costs much more than a scrape.
+            proven = max(streak, cfg['source_disable_fail_streak_proven'])
+            for row in conn.execute('SELECT id, url, ever_alive > 0 FROM sources WHERE enabled = 1 AND '
+                                    'fail_streak >= CASE WHEN ever_alive > 0 THEN ? ELSE ? END', (proven, streak)):
+                disabled.append((row[0], row[1], f'{proven if row[2] else streak}+ scrape errors in a row'))
             for row in conn.execute('SELECT id, url FROM sources WHERE enabled = 1 AND tested >= ? AND ever_alive = 0',
                                     (trial,)):
                 disabled.append((row[0], row[1], f'0 working proxies out of {trial}+ tested'))
@@ -439,9 +448,10 @@ def refresh_source_stats(cfg):
 
 
 def pick_for_test(cfg):
-    """Build one test round: stale alive proxies first, then new ones split across sources by yield.
+    """Build one test round: stale alive proxies first, then new ones split across sources by yield,
+    then dead proxies that once worked and are due for a re-test.
 
-    Dead proxies are never picked. A source still in its trial (fewer than source_trial_size of
+    Dead proxies that never worked are never picked. A source still in its trial (fewer than source_trial_size of
     its proxies tested) gets enough to finish the trial; the rest of the budget is shared in
     proportion to each source's yield, with a floor of source_min_share so weak sources still trickle.
     """
@@ -507,6 +517,15 @@ def pick_for_test(cfg):
                 picked[row['id']] = row
                 taken += 1
         budgets[sid] = taken
+    if cfg['recheck_dead_min'] > 0 and len(picked) < budget:
+        # Wait recheck_dead_min after the first failure, doubling per failed re-test up to the cap.
+        due = rows(f"SELECT {cols} FROM proxies p WHERE p.status = 'dead' AND p.successes > 0 AND "
+                   "p.last_checked < datetime('now', '-' || min(? * (1 << min(max(p.fail_streak, 1) - 1, 12)), ?) "
+                   "|| ' minutes') AND EXISTS (SELECT 1 FROM proxy_sources ps WHERE ps.ip = p.ip AND ps.port = p.port) "
+                   "ORDER BY p.last_alive DESC LIMIT ?",
+                   (cfg['recheck_dead_min'], cfg['recheck_dead_max_hours'] * 60, budget - len(picked)))
+        for row in due:
+            picked.setdefault(row['id'], row)
     with write() as conn:
         conn.execute('UPDATE sources SET last_budget = 0 WHERE last_budget != 0')
         conn.executemany('UPDATE sources SET last_budget = ? WHERE id = ?', [(n, sid) for sid, n in budgets.items()])
@@ -527,7 +546,8 @@ def store_test_results(results, country_of):
         conn.executemany("UPDATE proxies SET status = 'alive', protocol = ?, https = ?, anonymity = ?, latency_ms = ?, "
                          "exit_ip = ?, country = ?, last_checked = ?, last_alive = ?, checks = checks + 1, "
                          "successes = successes + 1, fail_streak = 0 WHERE id = ?", ok_rows)
-        # Dead proxies are not picked again; retention forgets them once no source lists them.
+        # Dead proxies that once worked are re-tested with a backoff (see pick_for_test); the
+        # rest are not picked again, and retention forgets them once no source lists them.
         conn.executemany("UPDATE proxies SET status = 'dead', last_checked = ?, checks = checks + 1, "
                          "fail_streak = fail_streak + 1 WHERE id = ?", bad_rows)
     return len(ok_rows), len(bad_rows)
