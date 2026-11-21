@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS proxies (
     checks INTEGER NOT NULL DEFAULT 0,
     successes INTEGER NOT NULL DEFAULT 0,
     fail_streak INTEGER NOT NULL DEFAULT 0,
+    https_latency_ms INTEGER,               -- time to a full HTTPS answer through it (CONNECT/TLS)
+    intercepts INTEGER NOT NULL DEFAULT 0,  -- showed a forged certificate once: never trusted again
+    worked INTEGER NOT NULL DEFAULT 0,      -- programs reported it worked for them
+    last_worked TEXT,
     UNIQUE (ip, port)
 );
 CREATE INDEX IF NOT EXISTS ix_proxies_status_checked ON proxies (status, last_checked);
@@ -110,6 +114,18 @@ CREATE INDEX IF NOT EXISTS ix_api_keys_previous_hash ON api_keys (previous_hash)
 """
 
 DEFAULT_JUDGES = 'http://httpbin.org/get\nhttp://azenv.net/\nhttp://proxyjudge.us/azenv.php'
+# Well-known sites with valid certificates. One per check, picked at random: no more
+# connections than a single URL, but a proxy that forges certificates for some sites only
+# meets several of them over its re-checks.
+DEFAULT_HTTPS_URLS = ('https://httpbin.org/ip\nhttps://www.cloudflare.com/cdn-cgi/trace\n'
+                      'https://www.google.com/generate_204\nhttps://www.apple.com/library/test/success.html\n'
+                      'https://detectportal.firefox.com/success.txt')
+OLD_DEFAULTS = {'https_test_url': ('https://httpbin.org/ip',)}   # replaced by the new default
+# Columns added after the first release: (name, definition), added on startup when missing.
+MIGRATIONS = (('https_latency_ms', 'INTEGER'), ('intercepts', 'INTEGER NOT NULL DEFAULT 0'),
+              ('worked', 'INTEGER NOT NULL DEFAULT 0'), ('last_worked', 'TEXT'))
+REPORT_REASONS = ('worked', 'dead', 'intercepts')
+WORKED_RECENT_HOURS = 6   # sort=score puts proxies reported working this recently first
 
 # key: (default, type, description)
 DEFAULTS = {
@@ -136,13 +152,15 @@ DEFAULTS = {
     'network_backoff_s': ('300', int, 'Pause testing this long after network trouble'),
     'test_timeout_s': ('10', int, 'Per-check timeout'),
     'recheck_alive_min': ('15', int, 'Re-test alive proxies after this many minutes'),
+    'recheck_trusted_min': ('5', int, 'Re-test trusted proxies (clean HTTPS) sooner: after this many minutes (0 = like other alive proxies)'),
+    'recheck_trusted_max': ('200', int, 'At most this many trusted proxies get the sooner re-test, best first'),
     'recheck_dead_min': ('60', int, 'Re-test dead proxies that once worked (and are still listed) after this many minutes, doubling after each failure (0 = never)'),
     'recheck_dead_max_hours': ('24', int, 'Longest wait between re-tests of a dead proxy that once worked'),
     'retention_unlisted_days': ('3', int, 'Forget dead proxies (and source listings) no source has listed for this many days'),
     'retention_new_unlisted_hours': ('12', int, 'Forget untested proxies no source has listed for this many hours'),
     'retention_dead_retest_days': ('0', int, 'Forget dead proxies after this many days even if still listed (0 = never)'),
     'judges': (DEFAULT_JUDGES, str, 'Proxy judge URLs (plain HTTP, one per line, httpbin or azenv format)'),
-    'https_test_url': ('https://httpbin.org/ip', str, 'URL used to check CONNECT/HTTPS support'),
+    'https_test_url': (DEFAULT_HTTPS_URLS, str, 'HTTPS URLs for the CONNECT/TLS check, one per line; each check picks one, so a proxy that intercepts only some sites is caught over a few rounds'),
     'image': ('python-generic-v2', str, 'Scraperack image (name or id) with Python 3 for both pools'),
     'scraper_cpu': ('0.5', float, 'Scraper microVM CPU cores'),
     'scraper_memory_mib': ('256', int, 'Scraper microVM memory (MiB)'),
@@ -184,6 +202,10 @@ def open_db(path):
     conn = db()
     conn.execute('PRAGMA journal_mode=WAL')
     with write_lock:   # executescript commits on its own
+        columns = {row[1] for row in conn.execute('PRAGMA table_info(proxies)')}
+        for name, definition in MIGRATIONS:
+            if columns and name not in columns:
+                conn.execute(f'ALTER TABLE proxies ADD COLUMN {name} {definition}')
         conn.executescript(SCHEMA)
     seed()
     with write() as conn:   # nothing runs before the scheduler starts: these were cut off
@@ -238,6 +260,9 @@ def seed():
         known = set(DEFAULTS) | set(STATUS_KEYS)
         for key in existing - known:
             conn.execute('DELETE FROM settings WHERE key = ?', (key,))
+        for key, old in OLD_DEFAULTS.items():   # untouched old defaults follow the new one
+            conn.execute(f'UPDATE settings SET value = ? WHERE key = ? AND value IN ({marks(old)})',
+                         (DEFAULTS[key][0], key, *old))
         conn.executemany('INSERT INTO settings (key, value) VALUES (?, ?)',
                          [(k, v[0]) for k, v in DEFAULTS.items() if k not in existing]
                          + [(k, '') for k in STATUS_KEYS if k not in existing])
@@ -458,11 +483,21 @@ def pick_for_test(cfg):
     budget = cfg['test_round_max']
     cols = 'p.id, p.ip, p.port, p.hint, p.protocol, p.status'
     picked = {}
+    if cfg['recheck_trusted_min'] > 0 and cfg['recheck_trusted_max'] > 0:
+        # The proxies programs actually get (clean HTTPS) are re-checked sooner, so a dead one
+        # stops being handed out within minutes. Few of them, and the round's pacer caps the
+        # connection rate either way: this reorders the budget, it doesn't add to it.
+        for row in rows(f"SELECT {cols} FROM proxies p WHERE p.status = 'alive' AND p.https = 1 "
+                        "AND p.intercepts = 0 AND (p.last_checked IS NULL OR p.last_checked < ?) "
+                        "ORDER BY p.last_checked IS NULL DESC, p.last_worked IS NULL, "
+                        "COALESCE(p.https_latency_ms, 999999) LIMIT ?",
+                        (ago_ts(minutes=cfg['recheck_trusted_min']), min(cfg['recheck_trusted_max'], budget))):
+            picked[row['id']] = row
     alive_due = rows(f"SELECT {cols} FROM proxies p WHERE p.status = 'alive' AND "
                      "(p.last_checked IS NULL OR p.last_checked < ?) ORDER BY p.last_checked LIMIT ?",
                      (ago_ts(minutes=cfg['recheck_alive_min']), budget))
     for row in alive_due:
-        picked[row['id']] = row
+        picked.setdefault(row['id'], row)
     remaining = budget - len(picked)
 
     source_rows = rows('SELECT id, tested, ever_alive, pending FROM sources WHERE enabled = 1 AND pending > 0')
@@ -529,7 +564,7 @@ def pick_for_test(cfg):
     with write() as conn:
         conn.execute('UPDATE sources SET last_budget = 0 WHERE last_budget != 0')
         conn.executemany('UPDATE sources SET last_budget = ? WHERE id = ?', [(n, sid) for sid, n in budgets.items()])
-    return list(picked.values()), len(alive_due)
+    return list(picked.values()), sum(row['status'] == 'alive' for row in picked.values())
 
 
 def store_test_results(results, country_of):
@@ -538,14 +573,17 @@ def store_test_results(results, country_of):
     for r in results:
         if r.get('ok'):
             ok_rows.append((r['protocol'], 1 if r.get('https') else 0, r.get('anonymity'), r.get('latency_ms'),
-                            (r.get('exit_ip') or '')[:45] or None, country_of(r['ip']), ts, ts, r['id']))
+                            (r.get('exit_ip') or '')[:45] or None, country_of(r['ip']), ts, ts,
+                            r.get('https_latency_ms') if r.get('https') else None,
+                            1 if r.get('intercepts') else 0, r['id']))
         else:
             bad_rows.append((ts, r['id']))
     with write() as conn:
         _count_source_yield(conn, results)
         conn.executemany("UPDATE proxies SET status = 'alive', protocol = ?, https = ?, anonymity = ?, latency_ms = ?, "
                          "exit_ip = ?, country = ?, last_checked = ?, last_alive = ?, checks = checks + 1, "
-                         "successes = successes + 1, fail_streak = 0 WHERE id = ?", ok_rows)
+                         "successes = successes + 1, fail_streak = 0, https_latency_ms = ?, "
+                         "intercepts = MAX(intercepts, ?) WHERE id = ?", ok_rows)
         # Dead proxies that once worked are re-tested with a backoff (see pick_for_test); the
         # rest are not picked again, and retention forgets them once no source lists them.
         conn.executemany("UPDATE proxies SET status = 'dead', last_checked = ?, checks = checks + 1, "
@@ -651,8 +689,20 @@ def split(value, allowed, name):
 
 
 def query_proxies(protocol=None, anonymity=None, country=None, max_latency=None, checked_within=None,
-                  limit=100, sort='latency'):
-    where, params = ["status = 'alive'"], []
+                  limit=100, sort='latency', trusted=False, connect=False, max_https_latency=None):
+    """Working proxies. A proxy reported dead waits for its re-test (``last_checked`` NULL).
+
+    ``connect``: HTTPS works through it (CONNECT for HTTP proxies, a TLS tunnel for SOCKS).
+    ``trusted``: that, with valid certificates, and it never forged one.
+    """
+    where, params = ["status = 'alive'", 'last_checked IS NOT NULL'], []
+    if connect or trusted:
+        where.append('https = 1')
+    if trusted:
+        where.append('intercepts = 0')
+    if max_https_latency:
+        where.append('https_latency_ms <= ?')
+        params.append(int(max_https_latency))
     protocols = split(protocol, PROTOCOLS, 'protocol')
     if protocols:
         parts = []
@@ -678,17 +728,53 @@ def query_proxies(protocol=None, anonymity=None, country=None, max_latency=None,
         where.append('last_checked >= ?')
         params.append(ago_ts(minutes=int(checked_within)))
     order = {'latency': 'latency_ms ASC', 'checked': 'last_checked DESC',
-             'uptime': 'successes DESC, latency_ms ASC'}.get(sort)
+             'uptime': 'successes DESC, latency_ms ASC',
+             # Reported working lately, then reliable (4 in 5 checks pass), then fast over HTTPS.
+             'score': 'COALESCE(last_worked >= ?, 0) DESC, successes * 5 >= checks * 4 DESC, '
+                      'COALESCE(https_latency_ms, 999999) ASC, latency_ms ASC'}.get(sort)
     if order is None:
-        raise ValueError('sort must be latency, checked or uptime')
-    result = rows('SELECT ip, port, protocol, https, anonymity, latency_ms, country, exit_ip, last_checked, checks, '
-                  f'successes FROM proxies WHERE {" AND ".join(where)} ORDER BY {order} LIMIT ?',
-                  (*params, max(1, min(int(limit), 50000))))
+        raise ValueError('sort must be latency, checked, uptime or score')
+    order_params = (ago_ts(hours=WORKED_RECENT_HOURS),) if sort == 'score' else ()
+    result = rows('SELECT ip, port, protocol, https, anonymity, latency_ms, https_latency_ms, intercepts, country, '
+                  'exit_ip, last_checked, checks, successes, worked, last_worked '
+                  f'FROM proxies WHERE {" AND ".join(where)} ORDER BY {order} LIMIT ?',
+                  (*params, *order_params, max(1, min(int(limit), 50000))))
     for row in result:
         row['https'] = bool(row['https'])
+        row['intercepts'] = bool(row['intercepts'])
+        row['last_worked'] = row['last_worked'].replace(' ', 'T') + 'Z' if row['last_worked'] else None
         row['url'] = f"{row['protocol']}://{row['ip']}:{row['port']}"
         row['last_checked'] = row['last_checked'].replace(' ', 'T') + 'Z' if row['last_checked'] else None
     return result
+
+
+def report_proxy(proxy, reason):
+    """What a program learned using a proxy. ``proxy``: ``scheme://host:port`` or ``host:port``.
+
+    ``worked``: it carried a real request (counts toward ``sort=score``). ``dead``: it failed
+    for the program; it is not handed out again until its re-test, which comes first in the
+    next round (one report alone never marks it dead). ``intercepts``: it showed a forged
+    certificate; it is never trusted again. Returns the proxy's id, or None if it is unknown.
+    """
+    if reason not in REPORT_REASONS:
+        raise ValueError(f'reason must be one of {", ".join(REPORT_REASONS)}')
+    text = str(proxy or '').strip()
+    host_port = text.split('://', 1)[-1].rsplit('@', 1)[-1].strip('/')
+    host, _, port = host_port.rpartition(':')
+    host = host.strip('[]')
+    if not host or not port.isdigit():
+        raise ValueError('proxy must look like scheme://host:port or host:port')
+    row = db().execute('SELECT id FROM proxies WHERE ip = ? AND port = ?', (host, int(port))).fetchone()
+    if row is None:
+        return None
+    statement = {
+        'worked': ('UPDATE proxies SET worked = worked + 1, last_worked = ? WHERE id = ?', (now(), row['id'])),
+        'dead': ("UPDATE proxies SET last_checked = NULL WHERE status = 'alive' AND id = ?", (row['id'],)),
+        'intercepts': ('UPDATE proxies SET intercepts = 1, https = 0 WHERE id = ?', (row['id'],)),
+    }[reason]
+    with write() as conn:
+        conn.execute(*statement)
+    return row['id']
 
 
 def stats():
@@ -706,6 +792,8 @@ def stats():
         'proxies': {'alive': by_status.get('alive', 0), 'new': by_status.get('new', 0), 'dead': by_status.get('dead', 0)},
         'alive': alive,
         'fast': scalar("SELECT COUNT(*) FROM proxies WHERE status = 'alive' AND latency_ms <= 2000"),
+        'trusted': scalar("SELECT COUNT(*) FROM proxies WHERE status = 'alive' AND https = 1 AND intercepts = 0"),
+        'intercepting': scalar('SELECT COUNT(*) FROM proxies WHERE intercepts = 1'),
         'sources': source,
     }
 

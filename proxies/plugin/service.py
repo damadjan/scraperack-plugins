@@ -355,6 +355,7 @@ class Scheduler:
         run_id = store.start_run("test")
         started = time.monotonic()
         judges = [j.strip() for j in cfg["judges"].splitlines() if j.strip()]
+        https_urls = [u.strip() for u in cfg["https_test_url"].splitlines() if u.strip()]
         items = [[p["id"], p["ip"], p["port"], p["hint"], p["protocol"] if p["status"] != "new" else None]
                  for p in picked]
         dead_due = sum(p["status"] == "dead" for p in picked)
@@ -374,7 +375,7 @@ class Scheduler:
             rate_used = self.rate
             batch_started = time.monotonic()
             try:
-                response = call(TESTER_POOL, "test", chunk, judges, cfg["https_test_url"], cfg["test_timeout_s"],
+                response = call(TESTER_POOL, "test", chunk, judges, https_urls, cfg["test_timeout_s"],
                                 cfg["test_concurrency"], per_vm)
             except Exception as error:
                 with guard:
@@ -546,7 +547,13 @@ def number(query, name, low=None, high=None):
 def proxy_filters(query):
     return {"protocol": first(query, "protocol"), "anonymity": first(query, "anonymity"),
             "country": first(query, "country"), "max_latency": number(query, "max_latency", 1),
-            "checked_within": number(query, "checked_within", 1)}
+            "checked_within": number(query, "checked_within", 1),
+            "trusted": flag(query, "trusted"), "connect": flag(query, "connect"),
+            "max_https_latency": number(query, "max_https_latency", 1)}
+
+
+def flag(query, name):
+    return first(query, name, "0").lower() in ("1", "true", "yes")
 
 
 def text_list(rows, scheme):
@@ -561,9 +568,12 @@ def ids_of(body):
     return ids
 
 
-def public_route(method, parts, query, headers):
-    """The proxy API for programs; needs a key while api_auth_required is on."""
-    if method != "GET" or parts not in (["proxies"], ["proxies", "random"], ["stats"]):
+PROGRAM_ROUTES = {("GET", "proxies"), ("GET", "proxies/random"), ("GET", "stats"), ("POST", "reports")}
+
+
+def public_route(method, parts, query, headers, body=None):
+    """The API for programs, other plugins included; needs a key while api_auth_required is on."""
+    if (method, "/".join(parts)) not in PROGRAM_ROUTES:
         return None
     if store.get_settings()["api_auth_required"]:
         auth = headers.get("Authorization") or ""
@@ -571,6 +581,12 @@ def public_route(method, parts, query, headers):
         problem = store.check_key(key)
         if problem:
             raise ApiError(401, problem)
+    if parts == ["reports"]:
+        reason = (body or {}).get("reason")
+        proxy_id = store.report_proxy((body or {}).get("proxy"), reason)
+        if proxy_id is None:
+            raise ApiError(404, "unknown proxy")
+        return 200, {"proxy": body.get("proxy"), "reason": reason}
     if parts == ["stats"]:
         summary = store.stats()
         return 200, {"proxies": summary["proxies"], "alive": summary["alive"],
@@ -664,7 +680,7 @@ def route(method, path, body, query, headers):
     if parts[:1] != ["api"]:
         raise ApiError(404, "not found")
     parts = parts[1:]
-    handled = public_route(method, parts, query, headers) or admin_route(method, parts, body, query)
+    handled = public_route(method, parts, query, headers, body) or admin_route(method, parts, body, query)
     if handled is None:
         raise ApiError(404, "not found")
     return handled

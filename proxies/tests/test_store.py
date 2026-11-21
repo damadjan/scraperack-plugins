@@ -92,6 +92,80 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             store.query_proxies(protocol="ftp")
 
+    def alive(self, specs):
+        """Proxies made alive by a test round: specs are (ip, https, https_latency_ms, intercepts)."""
+        store.add_sources(["https://t.example/list"])
+        source = store.enabled_sources()[0]["id"]
+        self.scrape(source, [[ip, 1080, "socks5"] for ip, *_ in specs])
+        store.refresh_source_stats(self.cfg)
+        picked = {p["ip"]: p["id"] for p in store.pick_for_test(self.cfg)[0]}
+        store.store_test_results([{"id": picked[ip], "ip": ip, "ok": True, "protocol": "socks5", "https": https,
+                                   "https_latency_ms": ms, "intercepts": forged, "anonymity": "elite",
+                                   "latency_ms": 100, "exit_ip": ip} for ip, https, ms, forged in specs],
+                                 lambda ip: "US")
+        return picked
+
+    def test_trust_filters_and_score(self):
+        self.alive([("7.7.7.1", True, 900, False), ("7.7.7.2", True, 300, False),
+                    ("7.7.7.3", False, None, True), ("7.7.7.4", False, None, False)])
+        ips = lambda **kw: [p["ip"] for p in store.query_proxies(sort="score", **kw)]
+        self.assertEqual(ips(trusted=True), ["7.7.7.2", "7.7.7.1"])
+        self.assertEqual(ips(connect=True), ["7.7.7.2", "7.7.7.1"])
+        self.assertEqual(ips(trusted=True, max_https_latency=500), ["7.7.7.2"])
+        self.assertEqual(store.stats()["intercepting"], 1)
+        # A later clean check never clears a forged certificate.
+        forged = store.query_proxies(limit=10)
+        row = next(p for p in forged if p["ip"] == "7.7.7.3")
+        self.assertTrue(row["intercepts"])
+        # Reported working moves a proxy to the front of sort=score.
+        store.report_proxy("socks5h://7.7.7.1:1080", "worked")
+        self.assertEqual(ips(trusted=True), ["7.7.7.1", "7.7.7.2"])
+        self.assertEqual(store.query_proxies(trusted=True, sort="score")[0]["worked"], 1)
+
+    def test_reports(self):
+        picked = self.alive([("6.6.6.1", True, 200, False), ("6.6.6.2", True, 250, False)])
+        self.assertIsNone(store.report_proxy("1.2.3.4:9", "dead"))
+        with self.assertRaises(ValueError):
+            store.report_proxy("6.6.6.1:1080", "nope")
+        with self.assertRaises(ValueError):
+            store.report_proxy("nonsense", "dead")
+        # Dead: not handed out until re-tested, and re-tested first in the next round.
+        self.assertEqual(store.report_proxy("socks5://6.6.6.1:1080", "dead"), picked["6.6.6.1"])
+        self.assertEqual([p["ip"] for p in store.query_proxies()], ["6.6.6.2"])
+        self.assertEqual(store.stats()["proxies"]["alive"], 2)   # one report never kills a proxy
+        self.assertEqual([p["id"] for p in store.pick_for_test(self.cfg)[0]], [picked["6.6.6.1"]])
+        # Intercepts: untrusted from then on.
+        store.report_proxy("6.6.6.2:1080", "intercepts")
+        self.assertEqual(store.query_proxies(trusted=True), [])
+
+    def test_trusted_proxies_are_rechecked_sooner(self):
+        picked = self.alive([("5.5.5.1", True, 200, False), ("5.5.5.2", False, None, False)])
+        with store.write() as conn:
+            conn.execute("UPDATE proxies SET last_checked = ?", (store.ago_ts(minutes=6),))
+        due, alive_due = store.pick_for_test(self.cfg)
+        self.assertEqual(([p["id"] for p in due], alive_due), ([picked["5.5.5.1"]], 1))
+        store.save_settings({"recheck_trusted_min": 0})
+        self.assertEqual(store.pick_for_test(store.get_settings()), ([], 0))
+
+    def test_old_database_gets_new_columns_and_check_urls(self):
+        path = Path(self.directory.name) / "old.db"
+        import sqlite3
+        conn = sqlite3.connect(path)
+        conn.executescript("CREATE TABLE proxies (id INTEGER PRIMARY KEY, ip TEXT NOT NULL, port INTEGER NOT NULL, "
+                           "hint TEXT, protocol TEXT, https INTEGER NOT NULL DEFAULT 0, anonymity TEXT, "
+                           "latency_ms INTEGER, exit_ip TEXT, country TEXT, status TEXT NOT NULL DEFAULT 'new', "
+                           "source_count INTEGER NOT NULL DEFAULT 1, first_seen TEXT NOT NULL, last_checked TEXT, "
+                           "last_alive TEXT, checks INTEGER NOT NULL DEFAULT 0, successes INTEGER NOT NULL DEFAULT 0, "
+                           "fail_streak INTEGER NOT NULL DEFAULT 0, UNIQUE (ip, port));"
+                           "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                           "INSERT INTO settings VALUES ('https_test_url', 'https://httpbin.org/ip');")
+        conn.close()
+        store.db().close()
+        store.open_db(path)
+        columns = {row["name"] for row in store.rows("PRAGMA table_info(proxies)")}
+        self.assertTrue({"https_latency_ms", "intercepts", "worked", "last_worked"} <= columns)
+        self.assertEqual(store.get_settings()["https_test_url"], store.DEFAULT_HTTPS_URLS)
+
     def test_dead_that_worked_is_retested_with_backoff(self):
         store.add_sources(["https://a.example/list"])
         source = store.enabled_sources()[0]["id"]

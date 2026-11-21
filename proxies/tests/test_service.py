@@ -119,6 +119,20 @@ class ServiceTest(unittest.TestCase):
         with self.assertRaises(service.ApiError):
             self.call("GET", "/api/proxies/random")
 
+    def test_reports_route(self):
+        store.save_settings({"api_auth_required": False})
+        with self.assertRaises(service.ApiError) as caught:
+            self.call("POST", "/api/reports", {"proxy": "socks5://1.2.3.4:1080", "reason": "dead"})
+        self.assertEqual(caught.exception.status, 404)
+        with self.assertRaises(ValueError):
+            self.call("POST", "/api/reports", {"proxy": "1.2.3.4:1080", "reason": "maybe"})
+        with self.assertRaises(service.ApiError):   # reports are POST only
+            self.call("GET", "/api/reports")
+        store.save_settings({"api_auth_required": True})
+        with self.assertRaises(service.ApiError) as caught:
+            self.call("POST", "/api/reports", {"proxy": "1.2.3.4:1080", "reason": "dead"})
+        self.assertEqual(caught.exception.status, 401)
+
     def test_admin_routes(self):
         self.assertEqual(self.call("POST", "/gui/api/sources", {"urls": "a.example\nb.example"})[1], {"added": 2})
         ids = [s["id"] for s in self.call("GET", "/api/sources")[1]]

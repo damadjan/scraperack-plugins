@@ -79,7 +79,24 @@ async def _read(response):
     return (await response.content.read(MAX_BODY)).decode('utf-8', errors='replace')
 
 
-async def _test_all(items, judges, https_url, timeout, concurrency, rate):
+def is_forged_certificate(error):
+    """Whether an HTTPS request through a proxy failed on the certificate: the proxy (or
+    something behind it) intercepts TLS. Other TLS failures (a closed tunnel, a timeout) are
+    just a proxy that can't do HTTPS."""
+    import ssl
+    import aiohttp
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, (aiohttp.ClientConnectorCertificateError, ssl.SSLCertVerificationError)):
+            return True
+        if 'CERTIFICATE_VERIFY_FAILED' in str(error):
+            return True
+        error = error.__cause__ or error.__context__
+    return False
+
+
+async def _test_all(items, judges, https_urls, timeout, concurrency, rate):
     import aiohttp
     from aiohttp_socks import ProxyConnector
 
@@ -123,16 +140,19 @@ async def _test_all(items, judges, https_url, timeout, concurrency, rate):
         if not parsed:
             raise ValueError('not a judge response')
         latency = int((time.monotonic() - started) * 1000)
-        https = False
+        https, https_latency, intercepts = False, None, False
+        started = time.monotonic()
         try:
-            async with session.get(https_url, headers=UA, proxy=proxy_url, allow_redirects=False,
-                                   ssl=https_ssl) as response:
+            async with session.get(random.choice(https_urls), headers=UA, proxy=proxy_url,
+                                   allow_redirects=False, ssl=https_ssl) as response:
                 await _read(response)
                 https = response.status < 400
-        except Exception:
-            pass
+                https_latency = int((time.monotonic() - started) * 1000)
+        except Exception as error:
+            intercepts = is_forged_certificate(error)
         origin, headers = parsed
-        return {'latency_ms': latency, 'https': https, 'exit_ip': exit_ip_of(origin),
+        return {'latency_ms': latency, 'https': https, 'https_latency_ms': https_latency if https else None,
+                'intercepts': intercepts, 'exit_ip': exit_ip_of(origin),
                 'anonymity': classify(origin, headers, real_ip)}
 
     http_session = aiohttp.ClientSession(
@@ -249,9 +269,11 @@ class _Pacer:
             await asyncio.sleep(delay)
 
 
-def test_batch(items, judges, https_url, timeout=10, concurrency=60, rate=40):
+def test_batch(items, judges, https_urls, timeout=10, concurrency=60, rate=40):
     """items: [[id, ip, port, hint, known_protocol], ...]. Called by the executor.
 
+    https_urls: a list of HTTPS URLs (or one URL); each check uses one at random.
     rate: new proxy connections per second in this microVM.
     """
-    return asyncio.run(_test_all([tuple(i) for i in items], list(judges), https_url, timeout, concurrency, rate))
+    urls = [https_urls] if isinstance(https_urls, str) else [u for u in https_urls if u]
+    return asyncio.run(_test_all([tuple(i) for i in items], list(judges), urls, timeout, concurrency, rate))
