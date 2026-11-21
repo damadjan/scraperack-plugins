@@ -244,6 +244,7 @@
       <div class="checks" id="f-anonymity"></div></div>
     <label class="field">Country<input id="f-country" placeholder="US,DE" style="width:100px"></label>
     <label class="field">Max latency ms<input id="f-latency" type="number" min="1" style="width:120px"></label>
+    <label class="chip"><input type="checkbox" id="f-trusted">Trusted only</label>
     <label class="field">Limit<input id="f-limit" type="number" min="1" max="50000" value="1000" style="width:100px"></label>
     <button class="btn primary" id="apply">Apply</button>
     <span class="spacer"></span>
@@ -463,9 +464,11 @@ const proxySort = {key: "latency_ms", desc: false};
 const PROXY_COLUMNS = [
   {key: "url", label: "Proxy", cls: "mono", render: r => escape(`${r.ip}:${r.port}`)},
   {key: "protocol", label: "Protocol"},
-  {key: "https", label: "HTTPS", render: r => r.https ? pill("yes", "yes") : ""},
+  {key: "https", label: "HTTPS", render: r => r.intercepts ? pill("error", "intercepts") : r.https ? pill("yes", "yes") : ""},
   {key: "anonymity", label: "Anonymity"},
   {key: "latency_ms", label: "Latency ms", num: true, render: r => fmt(r.latency_ms)},
+  {key: "https_latency_ms", label: "HTTPS ms", num: true, sort: r => r.https_latency_ms ?? 1e9, render: r => fmt(r.https_latency_ms)},
+  {key: "worked", label: "Worked", num: true, title: r => r.last_worked ? `last ${local(r.last_worked)}` : ""},
   {key: "country", label: "Country"},
   {key: "exit_ip", label: "Exit IP", cls: "mono"},
   {key: "uptime", label: "Uptime", num: true, sort: r => r.checks ? r.successes / r.checks : -1,
@@ -483,6 +486,7 @@ function proxyQuery() {
   const add = (k, v) => v && params.set(k, v);
   add("protocol", picked("f-protocol")); add("anonymity", picked("f-anonymity"));
   add("country", $("f-country").value.trim()); add("max_latency", $("f-latency").value);
+  if ($("f-trusted").checked) params.set("trusted", "1");
   add("limit", $("f-limit").value || "1000");
   return params;
 }
@@ -531,9 +535,11 @@ async function loadKeys() {
   keys = data.keys;
   $("auth-required").checked = data.auth_required;
   $("usage").textContent = `curl ${data.auth_required ? '-H "Authorization: Bearer <key>" ' : ""}"${API_BASE}proxies?protocol=socks5&limit=20&format=txt"\n\n` +
-    `GET ${API_BASE}proxies          filters: protocol, anonymity, country, max_latency, checked_within, limit, sort, format=json|txt, scheme\n` +
+    `GET ${API_BASE}proxies          filters: protocol, anonymity, country, max_latency, max_https_latency, checked_within,\n` +
+    `                                 trusted=1, connect=1, limit, sort=latency|checked|uptime|score, format=json|txt, scheme\n` +
     `GET ${API_BASE}proxies/random   one working proxy, same filters\n` +
-    `GET ${API_BASE}stats            counts`;
+    `GET ${API_BASE}stats            counts\n` +
+    `POST ${API_BASE}reports         {"proxy": "socks5://1.2.3.4:1080", "reason": "worked|dead|intercepts"}`;
   drawKeys();
 }
 $("auth-required").onchange = event => act(() => api("PUT", "settings", {api_auth_required: event.target.checked}),
@@ -585,6 +591,7 @@ function keyAction(action, id) {
 const GROUPS = [
   ["Schedule", [["scraping_enabled", "Scraping"], ["testing_enabled", "Testing"], ["scrape_interval_min", "Scrape interval", "min"],
     ["test_round_pause_s", "Pause between rounds", "s"], ["recheck_alive_min", "Re-test alive after", "min"],
+    ["recheck_trusted_min", "Re-test trusted after", "min"], ["recheck_trusted_max", "Trusted re-tests", ""],
     ["recheck_dead_min", "Re-test once-working dead after", "min"], ["recheck_dead_max_hours", "Longest dead re-test wait", "h"]]],
   ["Scraper", [["scrape_batch_size", "Batch size", "URLs"], ["scrape_parallel", "Parallel tasks"], ["scrape_timeout_s", "Fetch timeout", "s"]]],
   ["Source scoring", [["source_trial_size", "Trial size"], ["source_min_share", "Minimum budget share"],
@@ -596,14 +603,15 @@ const GROUPS = [
     ["test_rate_ceiling", "Learned ceiling", "/s"], ["network_backoff_s", "Backoff", "s"]]],
   ["Retention", [["retention_unlisted_days", "Forget dead after", "days"], ["retention_new_unlisted_hours", "Forget untested after", "h"],
     ["retention_dead_retest_days", "Forget listed dead after", "days"]]],
-  ["Check targets", [["judges", "Judge URLs"], ["https_test_url", "HTTPS check URL"]]],
+  ["Check targets", [["judges", "Judge URLs"], ["https_test_url", "HTTPS check URLs"]]],
 ];
+const WIDE = new Set(["judges", "https_test_url"]);
 const CLUSTER = [["cpu", "CPU cores"], ["memory_mib", "Memory MiB"], ["warm", "Warm microVMs"], ["max_instances", "Max microVMs"]];
 let saved = {}, meta = {}, images = [];
 function control(item) {
   const id = `s-${item.key}`;
   if (item.type === "bool") return `<input type="checkbox" id="${id}" data-setting="${item.key}">`;
-  if (item.key === "judges") return `<textarea id="${id}" data-setting="${item.key}"></textarea>`;
+  if (WIDE.has(item.key)) return `<textarea id="${id}" data-setting="${item.key}"></textarea>`;
   if (item.key === "image") return `<select id="${id}" data-setting="image">${images.map(i =>
     `<option value="${escape(i.name)}">${escape(i.name)}</option>`).join("")}</select>`;
   const step = item.type === "float" ? "any" : "1";
@@ -634,7 +642,7 @@ async function loadSettings() {
   if (!images.some(i => i.name === saved.image || i.id === saved.image)) images.unshift({name: saved.image});
   const row = (key, label, suffix) => {
     const item = meta[key];
-    return `<div class="setting ${key === "judges" ? "wide" : ""}"><div class="name">${escape(label)}</div>
+    return `<div class="setting ${WIDE.has(key) ? "wide" : ""}"><div class="name">${escape(label)}</div>
       <div class="control">${control(item)}${suffix ? `<span class="suffix">${escape(suffix)}</span>` : ""}</div>
       <div class="hint">${escape(item.description)}</div></div>`;
   };

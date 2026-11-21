@@ -57,12 +57,29 @@ curl -H "Authorization: Bearer $KEY" \
 | `GET /plugins/proxies/api/proxies` | Working proxies, `{count, proxies}` or one per line with `format=txt` |
 | `GET /plugins/proxies/api/proxies/random` | One working proxy among the 500 checked most recently |
 | `GET /plugins/proxies/api/stats` | Counts by status, protocol and anonymity |
+| `POST /plugins/proxies/api/reports` | `{proxy, reason}`: what a program learned using a proxy |
+
+These four are the whole contract for programs, and other plugins are programs too: they call
+the same endpoints with a key, through their core socket. There is no separate plugin API.
 
 Filters for both proxy endpoints: `protocol` (`http,https,socks4,socks5`; `https` means HTTP
 proxies that also do CONNECT), `anonymity` (`transparent,anonymous,elite`), `country` (ISO
-codes, `US,DE`), `max_latency` (ms), `checked_within` (minutes). `/proxies` also takes `limit`
-(default 100, at most 50000), `sort` (`latency`, `checked`, `uptime`) and, with `format=txt`,
-`scheme=1` for `protocol://ip:port` lines.
+codes, `US,DE`), `max_latency` (ms, to the HTTP judge), `max_https_latency` (ms, a full HTTPS
+answer through the proxy), `checked_within` (minutes), `connect=1` (HTTPS works through it)
+and `trusted=1` (HTTPS works with valid certificates, and the proxy never showed a forged one).
+`/proxies` also takes `limit` (default 100, at most 50000), `sort` (`latency`, `checked`,
+`uptime`, `score`) and, with `format=txt`, `scheme=1` for `protocol://ip:port` lines. `score`
+puts proxies reported working in the last 6 hours first, then reliable ones (4 in 5 checks
+pass), then the fastest over HTTPS.
+
+Reports take `proxy` as `scheme://host:port` or `host:port` and one `reason`:
+
+- `worked`: it carried a real request. Counts toward `sort=score`.
+- `dead`: it failed for you. It isn't handed out again until its re-test, which comes first in
+  the next round. One report never marks a proxy dead; only the tester does.
+- `intercepts`: it showed a forged certificate. It is never trusted again.
+
+An unknown proxy answers 404.
 
 The page's own endpoints (`overview`, `sources`, `browse`, `settings`, `keys`, `run`) are
 under the same `/plugins/proxies/api/` and need no key, like the rest of the controller's API.
@@ -84,8 +101,15 @@ is only disabled after `source_disable_fail_streak_proven` (48, about a day) err
 several sources, then the most recently discovered. Leftover budget goes to dead proxies that
 once worked (see below). Each check opens one plain TCP connection
 first (most dead proxies stop there), then tries HTTP, SOCKS5 and SOCKS4 through a judge to
-learn the protocol, latency, exit IP and anonymity, and a CONNECT to `https_test_url`.
-Countries come from the free DB-IP Lite database, downloaded monthly.
+learn the protocol, latency, exit IP and anonymity, and an HTTPS request through it to one of
+the `https_test_url` lines, picked at random, with certificates checked. That request gives
+the HTTPS latency, and a forged certificate marks the proxy as intercepting for good. Picking
+one URL per check costs no extra connections, yet a proxy that forges certificates for some
+sites only meets several of them over its re-checks. Trusted proxies (clean HTTPS) are
+re-checked every `recheck_trusted_min` (5) minutes instead of `recheck_alive_min` (15), at most
+`recheck_trusted_max` (200) of them, best first: they are the ones programs get. The round's
+connection rate stays capped either way (see below), so this reorders the budget rather than
+adding to it. Countries come from the free DB-IP Lite database, downloaded monthly.
 
 **Rate limiting.** A home internet link only tolerates a few new connections per second, so
 the tester starts at `test_rate_min` connections/s across the cluster and ramps up about 8% a
