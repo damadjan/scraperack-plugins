@@ -1,10 +1,12 @@
-"""Scraperack Python plugin.
+"""Scraperack Python plugin: warm Python environments.
 
-Environments: builds immutable virtualenv disks for Python package sets and
-keeps one Scraperack pool per environment.
+Environments: a package set is built once into a read-only virtualenv disk, and
+each environment is one Scraperack pool whose snapshot already has the
+interpreter running with the preload modules imported. Every microVM is
+restored from that snapshot, so a call lands in a ready interpreter.
 
-Executions: Python code run in those environments. Each execution is a core
-task on the environment's pool; this plugin owns how they are submitted,
+Executions: the function calls run in those environments. Each execution is a
+core task on the environment's pool; this plugin owns how they are submitted,
 listed, described and shown.
 
 Standard library only: the plugin installs without downloading anything.
@@ -47,6 +49,9 @@ STATE = DATA / "environments.json"
 MIGRATED = DATA / "migrated-environments.json"
 FUNCTIONS = DATA / "execution-functions-v2.json"
 FINISHED = {"succeeded", "failed", "timed_out"}
+# The SDK pickles functions with cloudpickle and the executor unpickles them; both sides
+# must run the same version, so every environment gets this one unless it pins its own.
+CLOUDPICKLE = "cloudpickle==3.1.2"
 
 DEFAULTS = {
     "packages": [], "preload": [], "warm_instances": 0, "max_instances": None,
@@ -55,6 +60,8 @@ DEFAULTS = {
 }
 FIELDS = ("name", "image", *DEFAULTS)
 lock = threading.RLock()
+creating = set()        # names of environments being created, held while their packages build
+build_locks = {}        # build key -> lock, so one package set is built once at a time
 
 
 class ApiError(Exception):
@@ -173,12 +180,25 @@ def run(*args, **kwargs):
     return process.stdout
 
 
+def with_cloudpickle(packages):
+    """The packages to install: the environment's, plus the pinned cloudpickle."""
+    if any(re.match(r"cloudpickle\s*($|[\[<>=!~;@ ])", package, re.I) for package in packages):
+        return list(packages)
+    return [CLOUDPICKLE, *packages]
+
+
 def build_key(image, packages):
     digest = sha256(b"python-plugin-v1")
     digest.update(image["sha256"].encode())
-    for package in ["cloudpickle", *packages]:
+    for package in with_cloudpickle(packages):
         digest.update(b"\0" + package.encode())
     return digest.hexdigest()
+
+
+def require_guest_disk():
+    if not GUEST_DISK:
+        raise ApiError(500, "the plugin's guest disk is missing; reinstall the plugin")
+    return GUEST_DISK
 
 
 # Runs in a builder microVM with the image's own Python, as a python-source payload (which
@@ -214,19 +234,18 @@ def main(packages):
 
 def run_build(image, packages, key):
     """Install packages into a virtualenv in a microVM of `image`; return the packed venv."""
-    if not GUEST_DISK:
-        raise ApiError(500, "the plugin's guest disk is missing; reinstall the plugin")
+    guest_disk = require_guest_disk()
     pool = f"python-build-{key[:12]}"
     core("POST", "/v1/pools", {
         "name": pool, "image": image["id"], "cpu_millis": 2000, "memory_mib": 2048, "disk_mib": 1024,
         "warm_instances": 0, "max_instances": 1, "timeout_secs": 1800, "idle_timeout_secs": 5,
         "reuse": False, "network": True, "ports": [], "preload": [],
-        "disks": [{"key": GUEST_DISK, "mount": GUEST_MOUNT}],
+        "disks": [{"key": guest_disk, "mount": GUEST_MOUNT}],
         "executor": ["/usr/bin/python3", f"{GUEST_MOUNT}/executor.py"],
         "display_name": "Python package build"})
     try:
         task = core("POST", "/v1/tasks", {"pool": pool, "queue": True, "payload": {
-            "encoding": "python-source", "source": BUILD_SOURCE, "params": [["cloudpickle", *packages]]}})
+            "encoding": "python-source", "source": BUILD_SOURCE, "params": [with_cloudpickle(packages)]}})
         while task["status"] not in FINISHED:
             task = core("GET", f"/v1/tasks/{task['id']}/wait", timeout=90)
         outcome = core("GET", f"/v1/tasks/{task['id']}/result")
@@ -247,6 +266,14 @@ def run_build(image, packages, key):
 def build_venv_disk(image, packages):
     """Install packages into a virtualenv in a microVM of the image and return a core disk key."""
     key = build_key(image, packages)
+    with lock:
+        key_lock = build_locks.setdefault(key, threading.Lock())
+    # A second environment with the same packages waits here, then finds the first one's disk.
+    with key_lock:
+        return build_venv_disk_once(image, packages, key)
+
+
+def build_venv_disk_once(image, packages, key):
     cache = DATA / "builds.json"
     with lock:
         cached = json.loads(cache.read_text()) if cache.exists() else {}
@@ -291,11 +318,9 @@ def ensure_disk(environment, force=False):
 # --- Pools --------------------------------------------------------------------
 
 def pool_spec(environment):
-    disks = [{"key": environment["venv_disk"], "mount": VENV_MOUNT}]
-    executor = [f"{VENV_MOUNT}/bin/python", "/opt/scraperack/executors/python"]
-    if GUEST_DISK:
-        disks.append({"key": GUEST_DISK, "mount": GUEST_MOUNT})
-        executor = [f"{VENV_MOUNT}/bin/python", f"{GUEST_MOUNT}/executor.py"]
+    disks = [{"key": environment["venv_disk"], "mount": VENV_MOUNT},
+             {"key": require_guest_disk(), "mount": GUEST_MOUNT}]
+    executor = [f"{VENV_MOUNT}/bin/python", f"{GUEST_MOUNT}/executor.py"]
     return {
         "name": environment["pool"],
         "image": environment["image"],
@@ -329,8 +354,7 @@ def apply_pool(environment):
 
 def view(environment, pools):
     pool = pools.get(environment["pool"], {})
-    return {**environment, "artifact": environment.get("venv_disk"),
-            "ready": bool(pool.get("ready")), "revision": pool.get("revision")}
+    return {**environment, "ready": bool(pool.get("ready")), "revision": pool.get("revision")}
 
 
 def pools_by_name():
@@ -348,20 +372,29 @@ def unused_disk(key, state):
 
 # --- Environment operations -------------------------------------------------------
 
+def name_taken(name, state, own_id=None):
+    return name in creating or any(other["name"] == name and other["id"] != own_id
+                                   for other in state.values())
+
+
 def create_environment(request):
     environment = normalize(request)
     with lock:
-        state = load_state()
-        if any(other["name"] == environment["name"] for other in state.values()):
+        if name_taken(environment["name"], load_state()):
             raise ApiError(409, "environment name already exists")
-    environment["id"] = str(uuid.uuid4())
-    environment["pool"] = f'python-{environment["id"]}'
-    environment["venv_disk"] = ensure_disk(environment)
-    apply_pool(environment)
-    with lock:
-        state = load_state()
-        state[environment["id"]] = environment
-        save_state(state)
+        creating.add(environment["name"])   # held while the packages build, outside the lock
+    try:
+        environment["id"] = str(uuid.uuid4())
+        environment["pool"] = f'python-{environment["id"]}'
+        environment["venv_disk"] = ensure_disk(environment)
+        apply_pool(environment)
+        with lock:
+            state = load_state()
+            state[environment["id"]] = environment
+            save_state(state)
+    finally:
+        with lock:
+            creating.discard(environment["name"])
     return view(environment, pools_by_name())
 
 
@@ -370,8 +403,7 @@ def update_environment(key, request):
         current = dict(find(load_state(), key))
     environment = normalize(request, current)
     with lock:
-        if any(other["name"] == environment["name"] and other["id"] != current["id"]
-               for other in load_state().values()):
+        if name_taken(environment["name"], load_state(), current["id"]):
             raise ApiError(409, "environment name already exists")
     rebuild = (environment["image"] != current["image"]
                or environment["packages"] != current["packages"])
@@ -418,7 +450,7 @@ def adopt_migrated():
         for legacy in json.loads(MIGRATED.read_text()):
             if legacy["id"] in state:
                 continue
-            environment = normalize({**legacy, "image": legacy["image"]})
+            environment = normalize(legacy)
             environment.update(id=legacy["id"], pool=legacy["pool"],
                                venv_disk=legacy.get("artifact"))
             state[environment["id"]] = environment
@@ -490,14 +522,10 @@ def describe_payload(payload):
         match = re.search(r"^def\s+main\s*\(", payload.get("source", ""), re.M)
         info.update(function="main" if match else "<source>", module="<source>")
         return info
-    if encoding == "files":
-        command = payload.get("command")
-        info["function"] = command if isinstance(command, str) else " ".join(map(str, command or []))
-        return info
-    if encoding not in ("python-function", "cloudpickle"):
+    if encoding != "python-function":
         return info
     try:
-        data = base64.b64decode(payload["function" if encoding == "python-function" else "data"])
+        data = base64.b64decode(payload["function"])
         strings = pickle_strings(data)
     except (KeyError, TypeError, ValueError, binascii.Error):
         return info
@@ -599,7 +627,7 @@ def owned_task(task_id):
 
 def list_executions(query):
     global function_cache
-    limit =min(int((query.get("limit") or ["200"])[0]), 1000)
+    limit = min(int((query.get("limit") or ["200"])[0]), 1000)
     params = {"owner": OWNER, "limit": limit}
     environment = (query.get("environment") or [None])[0]
     if environment:

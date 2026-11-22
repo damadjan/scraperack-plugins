@@ -5,6 +5,7 @@ import os
 import pickle
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -225,6 +226,31 @@ class ServiceTests(unittest.TestCase):
         self.service.reconcile()
         self.assertEqual(len(self.service.load_state()), 1)
 
+    def test_cloudpickle_is_pinned_unless_the_environment_pins_it(self):
+        self.assertEqual(self.service.with_cloudpickle(["httpx"]), ["cloudpickle==3.1.2", "httpx"])
+        self.assertEqual(self.service.with_cloudpickle(["cloudpickle==3.0.0"]), ["cloudpickle==3.0.0"])
+        self.assertEqual(self.service.with_cloudpickle(["cloudpickle-extra"])[0], "cloudpickle==3.1.2")
+
+    def test_a_name_being_created_is_taken(self):
+        started, release = threading.Event(), threading.Event()
+
+        def slow_build(image, packages):
+            started.set()
+            release.wait(5)
+            return "venv-1"
+
+        self.service.build_venv_disk = slow_build
+        first = threading.Thread(target=self.request, args=(
+            "POST", "/api/environments", {"name": "jobs", "image": "img"}))
+        first.start()
+        started.wait(5)
+        with self.assertRaises(self.service.ApiError) as duplicate:
+            self.request("POST", "/api/environments", {"name": "jobs", "image": "img"})
+        self.assertEqual(duplicate.exception.status, 409)
+        release.set()
+        first.join()
+        self.assertEqual([item["name"] for item in self.service.load_state().values()], ["jobs"])
+        self.assertEqual(self.service.creating, set())
 
     def test_packages_are_built_in_a_builder_microvm(self):
         calls, archive = [], base64.b64encode(b"packed venv").decode()
@@ -246,7 +272,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual((calls[0][0], pool["name"], pool["reuse"]), ("POST", "python-build-kkkkkkkkkkkk", False))
         self.assertEqual(pool["executor"], ["/usr/bin/python3", "/tmp/scraperack/python/executor.py"])
         payload = calls[1][2]["payload"]
-        self.assertEqual((payload["encoding"], payload["params"]), ("python-source", [["cloudpickle", "httpx==0.28.1"]]))
+        self.assertEqual((payload["encoding"], payload["params"]), ("python-source", [["cloudpickle==3.1.2", "httpx==0.28.1"]]))
         namespace = {}
         exec(compile(payload["source"], "<build>", "exec"), namespace)
         self.assertTrue(callable(namespace["main"]))

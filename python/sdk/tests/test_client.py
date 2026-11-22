@@ -78,6 +78,27 @@ class PythonTests(unittest.TestCase):
         self.assertIn("boom", str(raised.exception))
         self.assertEqual(raised.exception.execution["id"], "bad")
 
+    def test_call_passes_keyword_arguments_to_the_function(self):
+        bodies = []
+
+        def handler(request):
+            if request.method == "POST":
+                bodies.append(json.loads(request.content))
+                return httpx.Response(202, json={"id": "ok"})
+            if request.url.path.endswith("/wait"):
+                return httpx.Response(200, json={"id": "ok", "status": "succeeded"})
+            return httpx.Response(200, json={"status": "succeeded",
+                                             "value": {"encoding": "json", "data": 1}})
+
+        with mock(handler) as py:
+            py.call("jobs", task, value=5, secrets={"TOKEN": "x"})
+            py.call("jobs", task, 5)
+        payload = bodies[0]["payload"]
+        self.assertEqual(cloudpickle.loads(base64.b64decode(payload["kwargs"])), {"value": 5})
+        self.assertEqual(cloudpickle.loads(base64.b64decode(payload["params"])), ())
+        self.assertEqual(bodies[0]["secrets"], {"TOKEN": "x"})
+        self.assertNotIn("kwargs", bodies[1]["payload"])
+
     def test_environments_and_listing_use_the_plugin_api(self):
         calls = []
 

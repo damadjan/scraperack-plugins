@@ -1,8 +1,9 @@
 # scraperack-python
 
-Run Python functions on a self-hosted Scraperack cluster. This is the SDK of the
-[Python plugin](..): it manages environments (package sets with warm microVMs) and runs
-functions in them as executions. It builds on [`scraperack`](https://github.com/damadjan/scraperack/tree/main/sdk),
+Call Python functions in warm environments on a self-hosted Scraperack cluster. This is
+the SDK of the [Python plugin](..): an environment's packages are built once and imported
+before the microVM snapshot, so each call lands in a ready interpreter, and every call is
+kept as an execution. It builds on [`scraperack`](https://github.com/damadjan/scraperack/tree/main/sdk),
 the core client, which stays available as `py.cluster`.
 
 > Scraperack is alpha software. Use it on trusted infrastructure and expect breaking changes.
@@ -37,7 +38,7 @@ with Python("http://controller:7070") as py:
     print(py.result(execution["id"]))   # 5, or RemoteError with the traceback
     print(py.logs(execution["id"])["stdout"])
 
-    print(py.call("scrapers", add, 2, 3))   # run and wait in one step
+    print(py.call("scrapers", add, 2, b=3))   # run and wait in one step
 ```
 
 `working_dir` uploads project modules and files once, content-addressed. It is made
