@@ -5,6 +5,7 @@ They talk to the plugin's API at ``/plugins/python/api`` through the core
 else (images, pools, microVMs).
 """
 import base64
+import functools
 import hashlib
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -32,6 +33,9 @@ def function_payload(
     kwargs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Encode a function and its arguments for the Python executor."""
+    if kwargs:
+        # Bound into the function, so executors that only know positional params run it too.
+        function = functools.partial(function, **kwargs)
     data = cloudpickle.dumps(function)
     payload = {
         "encoding": "python-function",
@@ -39,8 +43,6 @@ def function_payload(
         "function": base64.b64encode(data).decode(),
         "params": base64.b64encode(cloudpickle.dumps(tuple(params))).decode(),
     }
-    if kwargs:
-        payload["kwargs"] = base64.b64encode(cloudpickle.dumps(dict(kwargs))).decode()
     if working_dir:
         payload["working_dir"] = working_dir
         payload["cache_key"] = hashlib.sha256(data + working_dir.encode()).hexdigest()

@@ -94,10 +94,11 @@ class PythonTests(unittest.TestCase):
             py.call("jobs", task, value=5, secrets={"TOKEN": "x"})
             py.call("jobs", task, 5)
         payload = bodies[0]["payload"]
-        self.assertEqual(cloudpickle.loads(base64.b64decode(payload["kwargs"])), {"value": 5})
-        self.assertEqual(cloudpickle.loads(base64.b64decode(payload["params"])), ())
+        function = cloudpickle.loads(base64.b64decode(payload["function"]))
+        params = cloudpickle.loads(base64.b64decode(payload["params"]))
+        self.assertEqual(function(*params), 5)
         self.assertEqual(bodies[0]["secrets"], {"TOKEN": "x"})
-        self.assertNotIn("kwargs", bodies[1]["payload"])
+        self.assertIs(cloudpickle.loads(base64.b64decode(bodies[1]["payload"]["function"])), task)
 
     def test_environments_and_listing_use_the_plugin_api(self):
         calls = []
