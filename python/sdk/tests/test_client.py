@@ -131,7 +131,86 @@ class PythonTests(unittest.TestCase):
         self.assertIsNone(decode(None))
 
 
+class QueueTests(unittest.TestCase):
+    def test_a_bound_call_runs_now_or_goes_in_a_queue(self):
+        requests = []
+
+        def handler(request):
+            requests.append(request)
+            if request.url.path.endswith("/executions"):
+                return httpx.Response(202, json={"id": "execution"})
+            body = json.loads(request.content)
+            if "jobs" in body:
+                return httpx.Response(202, json={"ids": [f"job-{index}" for index in
+                                                         range(len(body["jobs"]))]})
+            return httpx.Response(202, json={"id": "job"})
+
+        with mock(handler) as py:
+            call = py.bind("jobs", task, 7, variables={"MODE": "fast"}, secrets={"TOKEN": "x"})
+            self.assertEqual(call.run(), {"id": "execution"})
+            self.assertEqual(call.put("scrape"), "job")
+            self.assertEqual(py.queue("scrape").put({"runner": "js", "input": {"src": "1"}}), "job")
+            ids = py.queue("scrape").put_many(py.bind("jobs", task, n) for n in range(501))
+
+        self.assertEqual(len(ids), 501)
+        run, put, foreign, first_batch, second_batch = (json.loads(r.content) for r in requests)
+        self.assertEqual([r.url.path for r in requests[:2]],
+                         ["/plugins/python/api/executions", "/plugins/queue/api/queues/scrape/jobs"])
+        self.assertEqual((run["environment"], run["queue"], run["variables"]),
+                         ("jobs", True, {"MODE": "fast"}))
+        self.assertEqual(put["runner"], "python")
+        self.assertEqual(put["input"]["secrets"], {"TOKEN": "x"})
+        self.assertEqual(put["input"]["payload"], run["payload"])
+        self.assertEqual(cloudpickle.loads(base64.b64decode(put["input"]["payload"]["params"])), (7,))
+        self.assertEqual(foreign, {"runner": "js", "input": {"src": "1"}})
+        self.assertEqual((len(first_batch["jobs"]), len(second_batch["jobs"])), (500, 1))
+
+    def test_queue_management_paths(self):
+        requests = []
+
+        def handler(request):
+            requests.append((request.method, request.url.path, request.url.query.decode()))
+            return httpx.Response(200, json={"cancelled": 3, "name": "scrape"})
+
+        with mock(handler) as py:
+            queue = py.queue("scrape")
+            queue.configure(concurrency=5, rate_per_minute=60)
+            queue.jobs(status="failed", limit=10)
+            queue.job("j1")
+            queue.cancel("j1")
+            self.assertEqual(queue.cancel_waiting(), 3)
+            with self.assertRaises(TypeError):
+                queue.configure(run_at="tomorrow")
+            with self.assertRaises(TypeError):
+                queue.put({"input": {}})
+
+        base = "/plugins/queue/api"
+        self.assertEqual(requests, [
+            ("PUT", f"{base}/queues/scrape", ""),
+            ("GET", f"{base}/queues/scrape/jobs", "limit=10&status=failed"),
+            ("GET", f"{base}/jobs/j1", ""),
+            ("POST", f"{base}/jobs/j1/cancel", ""),
+            ("POST", f"{base}/queues/scrape/cancel", ""),
+        ])
+
+
 class AsyncPythonTests(unittest.IsolatedAsyncioTestCase):
+    async def test_bound_calls_go_in_queues(self):
+        bodies = []
+
+        def handler(request):
+            bodies.append((request.url.path, json.loads(request.content)))
+            return httpx.Response(202, json={"id": "job"})
+
+        client = httpx.AsyncClient(base_url="http://controller",
+                                   transport=httpx.MockTransport(handler))
+        async with AsyncPython(AsyncCluster("http://controller", client=client)) as py:
+            call = await py.bind("jobs", task, 1)
+            self.assertEqual(await call.put("scrape"), "job")
+        await client.aclose()
+        self.assertEqual(bodies[0][0], "/plugins/queue/api/queues/scrape/jobs")
+        self.assertEqual(bodies[0][1]["runner"], "python")
+
     async def test_run_uploads_working_directory(self):
         methods = []
 

@@ -7,6 +7,7 @@ GUI, its own API, and an SDK.
 | Plugin | What it adds | SDK |
 |---|---|---|
 | [`python`](python/) | Warm Python environments: pip packages built once, modules imported before the snapshot, so every call lands in a ready interpreter; each call is kept as an execution with its output | `pip install scraperack-python` |
+| [`queue`](queue/) | Queues that feed jobs to runner plugins (Python today) as long as each has room: concurrency, start rate, retries; jobs keep only their status | through `scraperack-python` |
 | [`workspaces`](workspaces/) | Long-lived XFCE desktops in the browser, with a persistent volume, suspend and resume, and moves to a node with room | none |
 | [`proxies`](proxies/) | Free public proxies scraped from your sources, tested in microVMs, and served through an API with keys | none |
 
@@ -38,6 +39,7 @@ with Python("http://controller:7070") as py:
 - [Writing a plugin](docs/writing-plugins.md)
 - [Python plugin](docs/python-plugin.md)
 - [Python SDK](docs/python-sdk.md)
+- [Queue plugin](docs/queue-plugin.md)
 - [Workspaces plugin](docs/workspaces-plugin.md)
 - [Proxies plugin](docs/proxies-plugin.md)
 

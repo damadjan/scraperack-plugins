@@ -1,4 +1,4 @@
-"""Clients for the Scraperack Python plugin: environments and executions.
+"""Clients for the Scraperack Python plugin: environments, executions and queued calls.
 
 They talk to the plugin's API at ``/plugins/python/api`` through the core
 ``scraperack`` client, which stays available as ``.cluster`` for everything
@@ -15,7 +15,15 @@ import cloudpickle
 from scraperack import AsyncCluster, Cluster
 from scraperack.types import FINISHED
 
-from .types import EncodedValue, Environment, Execution, ExecutionDetails, ExecutionLogs
+from .queue import AsyncCall, AsyncQueue, Call, Queue
+from .types import (
+    EncodedValue,
+    Environment,
+    Execution,
+    ExecutionDetails,
+    ExecutionLogs,
+    QueueView,
+)
 
 DEFAULT_URL = "http://127.0.0.1:7070"
 
@@ -104,10 +112,12 @@ def _key(value: str) -> str:
 class Python:
     """Synchronous client for Python environments and executions."""
 
-    def __init__(self, cluster: str | Cluster = DEFAULT_URL, *, plugin: str = "python") -> None:
+    def __init__(self, cluster: str | Cluster = DEFAULT_URL, *, plugin: str = "python",
+                 queue_plugin: str = "queue") -> None:
         self._owns_cluster = isinstance(cluster, str)
         self.cluster = Cluster(cluster) if isinstance(cluster, str) else cluster
         self.api = f"/plugins/{_key(plugin)}/api"
+        self.queue_api = f"/plugins/{_key(queue_plugin)}/api"
 
     def __enter__(self) -> "Python":
         return self
@@ -207,15 +217,37 @@ class Python:
     def logs(self, execution_id: str) -> ExecutionLogs:
         return self._call("GET", f"/executions/{_key(execution_id)}/logs")
 
+    # Calls built ahead of time, and queues
+    def bind(self, environment: str, function: Callable[..., Any], /, *params: Any,
+             variables: Mapping[str, str] | None = None,
+             secrets: Mapping[str, str] | None = None,
+             working_dir: str | Path | None = None, **kwargs: Any) -> Call:
+        """Build ``function(*params, **kwargs)`` without starting it.
+
+        ``call.run()`` starts it now; ``call.put("queue")`` puts it in a queue of the queue
+        plugin. A working directory is uploaded here, once.
+        """
+        digest = self.cluster.upload_working_dir(working_dir) if working_dir else None
+        payload = function_payload(function, params, digest, kwargs)
+        return Call(self, environment, payload, variables, secrets)
+
+    def queue(self, name: str) -> Queue:
+        """A queue of the queue plugin (create it with ``.configure(...)``)."""
+        return Queue(self, name, self.queue_api)
+
+    def queues(self) -> list[QueueView]:
+        return self.cluster.request("GET", f"{self.queue_api}/queues")
+
 
 class AsyncPython:
     """Asynchronous client for Python environments and executions."""
 
     def __init__(self, cluster: str | AsyncCluster = DEFAULT_URL, *,
-                 plugin: str = "python") -> None:
+                 plugin: str = "python", queue_plugin: str = "queue") -> None:
         self._owns_cluster = isinstance(cluster, str)
         self.cluster = AsyncCluster(cluster) if isinstance(cluster, str) else cluster
         self.api = f"/plugins/{_key(plugin)}/api"
+        self.queue_api = f"/plugins/{_key(queue_plugin)}/api"
 
     async def __aenter__(self) -> "AsyncPython":
         return self
@@ -302,3 +334,18 @@ class AsyncPython:
 
     async def logs(self, execution_id: str) -> ExecutionLogs:
         return await self._call("GET", f"/executions/{_key(execution_id)}/logs")
+
+    # Calls built ahead of time, and queues
+    async def bind(self, environment: str, function: Callable[..., Any], /, *params: Any,
+                   variables: Mapping[str, str] | None = None,
+                   secrets: Mapping[str, str] | None = None,
+                   working_dir: str | Path | None = None, **kwargs: Any) -> AsyncCall:
+        digest = await self.cluster.upload_working_dir(working_dir) if working_dir else None
+        payload = function_payload(function, params, digest, kwargs)
+        return AsyncCall(self, environment, payload, variables, secrets)
+
+    def queue(self, name: str) -> AsyncQueue:
+        return AsyncQueue(self, name, self.queue_api)
+
+    async def queues(self) -> list[QueueView]:
+        return await self.cluster.request("GET", f"{self.queue_api}/queues")

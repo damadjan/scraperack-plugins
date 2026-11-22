@@ -51,6 +51,9 @@ class FakeCore:
             return task["payload"]
         if parts[1] == "logs":
             return {"stdout": "hello\n", "stderr": ""}
+        if parts[1] == "stop" and method == "POST":
+            task.update(status="failed", error="task was stopped")
+            return self.view(task)
         if parts[1] == "result":
             return {"status": task["status"], "value": {"encoding": "json", "data": 42}, "error": None}
         raise AssertionError(path)
@@ -277,6 +280,44 @@ class ServiceTests(unittest.TestCase):
         exec(compile(payload["source"], "<build>", "exec"), namespace)
         self.assertTrue(callable(namespace["main"]))
         self.assertEqual(calls[-1][:2], ("DELETE", "/v1/pools/python-build-kkkkkkkkkkkk"))
+
+
+    def test_runs_are_executions_behind_the_runner_contract(self):
+        self.request("POST", "/api/environments", {"name": "jobs", "image": "img"})
+        run_input = {"environment": "jobs", "payload": {"encoding": "python-source", "source": ""}}
+        status, run = self.request("POST", "/api/runs", {"key": "job-1/1", "input": run_input})
+        self.assertEqual((status, run["status"], run["failure"]), (202, "queued", None))
+        # The same key is the same run: a caller that crashed after submitting gets it back.
+        _, again = self.request("POST", "/api/runs", {"key": "job-1/1", "input": run_input})
+        self.assertEqual(again["id"], run["id"])
+        self.assertEqual(len(self.core.tasks), 1)
+        _, other = self.request("POST", "/api/runs", {"key": "job-1/2", "input": run_input})
+        self.assertNotEqual(other["id"], run["id"])
+
+        tasks = self.core.tasks
+        tasks[run["id"]].update(status="succeeded")
+        tasks[other["id"]].update(status="failed",
+                                  error="Traceback (most recent call last):\nValueError: boom")
+        _, runs = self.request("GET", "/api/runs", query={"ids": [f'{run["id"]},{other["id"]},gone']})
+        self.assertEqual([(item["status"], item["failure"]) for item in runs],
+                         [("succeeded", None), ("failed", "code"), ("unknown", None)])
+
+        _, third = self.request("POST", "/api/runs", {"key": "job-2/1", "input": run_input})
+        _, stopped = self.request("POST", f'/api/runs/{third["id"]}/stop')
+        self.assertEqual((stopped["status"], stopped["failure"]), ("failed", "stopped"))
+        with self.assertRaises(self.service.ApiError) as missing:
+            self.request("POST", "/api/runs", {"key": "x", "input": {"environment": "nope",
+                                                                     "payload": {}}})
+        self.assertEqual(missing.exception.status, 404)
+
+    def test_run_failures_are_classified(self):
+        failure = self.service.failure_of
+        self.assertEqual(failure({"status": "timed_out", "error": "task timed out"}), "timeout")
+        self.assertEqual(failure({"status": "failed", "error": "the node lost the task: its "
+                                  "microVM ended without a result"}), "infrastructure")
+        self.assertEqual(failure({"status": "failed", "error": "stopped before it started"}),
+                         "stopped")
+        self.assertIsNone(failure({"status": "running", "error": None}))
 
 
 if __name__ == "__main__":

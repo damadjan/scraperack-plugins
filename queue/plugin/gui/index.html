@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Queue</title>
+<style>
+  :root { --base: #080808; --surface: #111; --surface-2: #181818; --line: #303030; --muted: #969696;
+          --accent: #d946ef; --text: #ededed; --danger: #ef4444; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 6px 8px; background: var(--base); color: var(--text);
+         font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h2 { font-size: 16px; font-weight: 600; margin: 0; }
+  .muted { color: var(--muted); font-size: 13px; }
+  label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+  input, select { background: var(--surface-2); color: var(--text); border: 1px solid #3b3b3b;
+         border-radius: 5px; padding: 7px 8px; font: inherit; min-width: 0; width: 100%; }
+  .check { flex-direction: row; align-items: center; gap: 6px; color: var(--text); font-size: 13px; }
+  .check input { width: auto; accent-color: var(--accent); }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 5px; padding: 8px 14px;
+           font: inherit; font-weight: 600; cursor: pointer; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid #4b4b4b; }
+  button.small { padding: 3px 9px; font-size: 12px; font-weight: 500; }
+  button.danger { color: #fca5a5; border-color: #7f1d1d; }
+  button:disabled { opacity: .5; cursor: progress; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line);
+          border-radius: 8px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #292929; white-space: nowrap; }
+  th { background: #191919; color: #aaa; font-weight: 500; font-size: 13px; }
+  tbody tr.click { cursor: pointer; }
+  tbody tr.click:hover, tbody tr.selected { background: #242424; }
+  td.reason { white-space: normal; max-width: 420px; word-break: break-word; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { border: 1px solid #4b4b4b; border-radius: 999px; padding: 2px 9px; font-size: 12px; }
+  .done { color: #6ee7b7; border-color: #166534; background: #052e1b; }
+  .failed { color: #fca5a5; border-color: #991b1b; background: #2a0a0a; }
+  .queued, .paused { color: #fcd34d; border-color: #854d0e; background: #422006; }
+  .running, .active { color: #f0abfc; border-color: #86198f; background: #3b0a45; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .status { min-height: 20px; margin: 6px 0; white-space: pre-wrap; }
+  .error { color: #fca5a5; }
+  .scroll { overflow-x: auto; }
+  .head { display: flex; align-items: center; gap: 8px; margin: 12px 0 8px; }
+  .head .space { flex: 1; }
+  .actions { display: flex; gap: 6px; }
+  dialog { background: var(--surface); color: var(--text); border: 1px solid var(--line); border-radius: 10px;
+           width: min(760px, 96vw); max-height: 92vh; padding: 18px 20px; }
+  dialog::backdrop { background: rgba(0, 0, 0, .6); }
+  .fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+  .options { display: flex; gap: 20px; margin-top: 14px; }
+  .foot { display: flex; gap: 8px; margin-top: 18px; }
+  .foot .space { flex: 1; }
+  @media (max-width: 640px) { .fields { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="head" style="margin-top:4px"><h2>Queues</h2><span class="space"></span>
+  <button id="new">New queue</button></div>
+<div class="muted">Each queue feeds its jobs to their runner (a plugin such as Python) as long as it has
+  room: at most <b>concurrency</b> running, at most <b>rate</b> starts a minute. Jobs keep only their status and
+  reason; what a job produces goes wherever the job sends it.</div>
+<div class="status muted" id="notice"></div>
+<div class="scroll">
+<table>
+  <thead><tr><th>Name</th><th>State</th><th class="num">Waiting</th><th class="num">Running</th>
+    <th class="num">Done</th><th class="num">Failed</th><th class="num">Cancelled</th><th class="num">Per minute</th>
+    <th class="num">Concurrency</th><th class="num">Rate / min</th><th class="num">Attempts</th><th></th></tr></thead>
+  <tbody id="queues"><tr><td colspan="12" class="muted">Loading…</td></tr></tbody>
+</table>
+</div>
+
+<section id="jobs-section" hidden>
+<div class="head"><h2 id="jobs-title">Jobs</h2><span class="space"></span>
+  <label style="flex-direction:row;align-items:center;gap:6px">Status
+    <select id="filter" style="width:auto"><option value="">All</option><option>queued</option>
+      <option>running</option><option>done</option><option>failed</option><option>cancelled</option></select></label></div>
+<div class="scroll">
+<table>
+  <thead><tr><th>Job</th><th>Runner</th><th>Status</th><th class="num">Attempts</th><th>Reason</th>
+    <th>Created</th><th>Finished</th><th></th></tr></thead>
+  <tbody id="jobs"></tbody>
+</table>
+</div>
+</section>
+
+<dialog id="editor">
+  <h2 id="editor-title">New queue</h2>
+  <form id="form">
+    <div class="fields">
+      <label>Name<input name="name" required pattern="[A-Za-z0-9._\-]{1,64}"></label>
+      <label>Concurrency<input name="concurrency" type="number" min="1" max="10000" value="10" required></label>
+      <label>Rate per minute<input name="rate_per_minute" type="number" min="1" placeholder="no limit"></label>
+      <label>Max attempts<input name="max_attempts" type="number" min="1" max="100" value="3" required></label>
+      <label>Timeout seconds<input name="timeout_secs" type="number" min="1" placeholder="runner's own"></label>
+      <label>Max waiting jobs<input name="max_queued" type="number" min="1" value="1000000" required></label>
+    </div>
+    <div class="options">
+      <label class="check"><input type="checkbox" name="retry_code_errors"> Retry when the code fails or times out</label>
+      <label class="check"><input type="checkbox" name="paused"> Paused</label>
+    </div>
+    <div class="muted" style="margin-top:10px">Failures of the machinery (a microVM or node lost, the runner
+      unreachable) are always retried up to the attempts. A retried job goes to the back of the queue.</div>
+    <div class="status error" id="form-status"></div>
+    <div class="foot"><button type="submit" id="save">Save</button>
+      <button type="button" class="secondary" id="close">Close</button></div>
+  </form>
+</dialog>
+
+<dialog id="details"></dialog>
+
+<script>
+let selected = null;
+let queues = [];
+
+async function api(method, path, body) {
+  const response = await fetch(`api/${path}`, {method, headers: {"Content-Type": "application/json"},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) throw new Error(data?.error || response.statusText);
+  return data;
+}
+
+const esc = value => String(value ?? "").replace(/[&<>"']/g,
+  char => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[char]);
+const when = ms => ms ? new Date(ms).toLocaleString() : "";
+const count = value => Number(value || 0).toLocaleString();
+const notice = (text, error) => {
+  const element = document.getElementById("notice");
+  element.textContent = text || "";
+  element.className = `status ${error ? "error" : "muted"}`;
+};
+
+function renderQueues() {
+  const body = document.getElementById("queues");
+  if (!queues.length) {
+    body.innerHTML = `<tr><td colspan="12" class="muted">No queues yet. Create one, then put jobs in it from an SDK
+      (<span class="mono">py.queue("name").put(call)</span>) or with <span class="mono">POST api/queues/&lt;name&gt;/jobs</span>.</td></tr>`;
+    return;
+  }
+  body.innerHTML = queues.map(queue => {
+    const counts = queue.counts;
+    const state = queue.paused ? "paused" : "active";
+    return `<tr class="click ${queue.name === selected ? "selected" : ""}" data-name="${esc(queue.name)}">
+      <td><b>${esc(queue.name)}</b></td><td><span class="pill ${state}">${state}</span></td>
+      <td class="num">${count(counts.queued)}</td><td class="num">${count(counts.running)}</td>
+      <td class="num">${count(counts.done)}</td><td class="num">${count(counts.failed)}</td>
+      <td class="num">${count(counts.cancelled)}</td><td class="num">${count(counts.finished_last_minute)}</td>
+      <td class="num">${queue.concurrency}</td><td class="num">${queue.rate_per_minute ?? "—"}</td>
+      <td class="num">${queue.max_attempts}</td>
+      <td><div class="actions">
+        <button class="secondary small" data-act="${queue.paused ? "resume" : "pause"}">${queue.paused ? "Resume" : "Pause"}</button>
+        <button class="secondary small" data-act="edit">Edit</button>
+        <button class="secondary small" data-act="cancel">Cancel waiting</button>
+        <button class="secondary small danger" data-act="delete">Delete</button></div></td></tr>`;
+  }).join("");
+}
+
+async function loadQueues() {
+  try {
+    queues = await api("GET", "queues");
+    renderQueues();
+  } catch (error) {
+    notice(error.message, true);
+  }
+}
+
+async function loadJobs() {
+  const section = document.getElementById("jobs-section");
+  if (!selected) { section.hidden = true; return; }
+  section.hidden = false;
+  document.getElementById("jobs-title").textContent = `Jobs in ${selected}`;
+  const status = document.getElementById("filter").value;
+  const query = new URLSearchParams({limit: "200", ...(status ? {status} : {})});
+  try {
+    const jobs = await api("GET", `queues/${encodeURIComponent(selected)}/jobs?${query}`);
+    document.getElementById("jobs").innerHTML = jobs.length ? jobs.map(job => `
+      <tr class="click" data-job="${esc(job.id)}"><td class="mono">${esc(job.id)}</td><td>${esc(job.runner)}</td>
+        <td><span class="pill ${esc(job.status)}">${esc(job.status)}</span></td>
+        <td class="num">${job.attempts}</td><td class="reason">${esc(job.reason)}</td>
+        <td>${when(job.created_ms)}</td><td>${when(job.finished_ms)}</td>
+        <td>${["queued", "running"].includes(job.status)
+          ? `<button class="secondary small" data-cancel="${esc(job.id)}">Cancel</button>` : ""}</td></tr>`).join("")
+      : `<tr><td colspan="8" class="muted">No jobs${status ? ` with status ${esc(status)}` : ""}.</td></tr>`;
+  } catch (error) {
+    notice(error.message, true);
+  }
+}
+
+async function showJob(id) {
+  const job = await api("GET", `jobs/${encodeURIComponent(id)}`);
+  const dialog = document.getElementById("details");
+  dialog.innerHTML = `<h2>Job <span class="mono">${esc(job.id)}</span></h2>
+    <p><span class="pill ${esc(job.status)}">${esc(job.status)}</span>
+      <span class="muted">queue ${esc(job.queue)} · runner ${esc(job.runner)}</span></p>
+    ${job.reason ? `<p class="${job.status === "failed" ? "error" : "muted"}">${esc(job.reason)}</p>` : ""}
+    <p class="muted">Created ${when(job.created_ms)}${job.finished_ms ? ` · finished ${when(job.finished_ms)}` : ""}</p>
+    <table><thead><tr><th>#</th><th>Run</th><th>Outcome</th><th>Reason</th><th>Started</th><th>Finished</th></tr></thead>
+    <tbody>${job.attempts_detail.map(attempt => `<tr><td>${attempt.number}</td>
+      <td class="mono">${esc(attempt.run_id || "submitting")}</td><td>${esc(attempt.outcome || "running")}</td>
+      <td class="reason">${esc(attempt.reason)}</td><td>${when(attempt.started_ms)}</td>
+      <td>${when(attempt.finished_ms)}</td></tr>`).join("") ||
+      `<tr><td colspan="6" class="muted">Not started yet.</td></tr>`}</tbody></table>
+    <p class="muted">Each run's logs are kept by its runner (for Python, on the Executions tab).</p>
+    <div class="foot"><span class="space"></span><button class="secondary" id="details-close">Close</button></div>`;
+  dialog.querySelector("#details-close").onclick = () => dialog.close();
+  dialog.showModal();
+}
+
+function openEditor(queue) {
+  const form = document.getElementById("form");
+  form.reset();
+  document.getElementById("form-status").textContent = "";
+  document.getElementById("editor-title").textContent = queue ? `Edit ${queue.name}` : "New queue";
+  form.elements.name.readOnly = !!queue;
+  if (queue) {
+    for (const field of ["name", "concurrency", "rate_per_minute", "max_attempts", "timeout_secs", "max_queued"]) {
+      form.elements[field].value = queue[field] ?? "";
+    }
+    form.elements.retry_code_errors.checked = queue.retry_code_errors;
+    form.elements.paused.checked = queue.paused;
+  }
+  document.getElementById("editor").showModal();
+}
+
+document.getElementById("form").onsubmit = async event => {
+  event.preventDefault();
+  const form = event.target;
+  const number = field => form.elements[field].value === "" ? null : Number(form.elements[field].value);
+  const body = {concurrency: number("concurrency"), rate_per_minute: number("rate_per_minute"),
+    max_attempts: number("max_attempts"), timeout_secs: number("timeout_secs"), max_queued: number("max_queued"),
+    retry_code_errors: form.elements.retry_code_errors.checked, paused: form.elements.paused.checked};
+  const button = document.getElementById("save");
+  button.disabled = true;
+  try {
+    await api("PUT", `queues/${encodeURIComponent(form.elements.name.value.trim())}`, body);
+    document.getElementById("editor").close();
+    selected = form.elements.name.value.trim();
+    await refresh();
+  } catch (error) {
+    document.getElementById("form-status").textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+};
+
+document.getElementById("queues").onclick = async event => {
+  const row = event.target.closest("tr[data-name]");
+  if (!row) return;
+  const name = row.dataset.name;
+  const queue = queues.find(item => item.name === name);
+  const action = event.target.dataset.act;
+  try {
+    if (action === "pause" || action === "resume") {
+      await api("PUT", `queues/${encodeURIComponent(name)}`, {paused: action === "pause"});
+    } else if (action === "edit") {
+      return openEditor(queue);
+    } else if (action === "cancel") {
+      if (!confirm(`Cancel the ${count(queue.counts.queued)} waiting jobs of ${name}? Running jobs finish.`)) return;
+      const result = await api("POST", `queues/${encodeURIComponent(name)}/cancel`, {});
+      notice(`Cancelled ${count(result.cancelled)} jobs in ${name}.`);
+    } else if (action === "delete") {
+      if (!confirm(`Delete queue ${name}? Its waiting jobs are dropped and running ones are stopped.`)) return;
+      await api("DELETE", `queues/${encodeURIComponent(name)}`);
+      if (selected === name) selected = null;
+    } else {
+      selected = name;
+    }
+    await refresh();
+  } catch (error) {
+    notice(error.message, true);
+  }
+};
+
+document.getElementById("jobs").onclick = async event => {
+  try {
+    if (event.target.dataset.cancel) {
+      await api("POST", `jobs/${encodeURIComponent(event.target.dataset.cancel)}/cancel`, {});
+      return refresh();
+    }
+    const row = event.target.closest("tr[data-job]");
+    if (row) await showJob(row.dataset.job);
+  } catch (error) {
+    notice(error.message, true);
+  }
+};
+
+document.getElementById("new").onclick = () => openEditor(null);
+document.getElementById("close").onclick = () => document.getElementById("editor").close();
+document.getElementById("filter").onchange = loadJobs;
+
+async function refresh() {
+  await loadQueues();
+  await loadJobs();
+}
+
+refresh();
+setInterval(() => { if (!document.querySelector("dialog[open]")) refresh(); }, 3000);
+</script>
+</body>
+</html>

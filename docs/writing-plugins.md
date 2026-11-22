@@ -82,6 +82,13 @@ The `guest` folder is built into an ext4 disk. Attach it to a pool and point the
 The executor protocol (a Unix socket with length-prefixed JSON) is described in
 [scraperack/docs/executors.md](https://github.com/damadjan/scraperack/blob/main/docs/executors.md).
 
+## Runners
+
+A plugin that runs work can let the [queue plugin](queue-plugin.md) feed it by serving the
+[runner contract](queue-plugin.md#runner-contract): `POST /runs {key, input}`,
+`GET /runs?ids=`, `GET /runs/{id}` and `POST /runs/{id}/stop` under its `/api/`. Plugins reach
+each other's APIs through the core socket at `/plugins/<name>/api/...`.
+
 ## SDK
 
 If users call the plugin from code, ship an SDK next to it (for example `python/sdk`) that

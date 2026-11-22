@@ -6,6 +6,7 @@
 | [Writing a plugin](writing-plugins.md) | Manifest, process contract, core API, guest disks, executors |
 | [Python plugin](python-plugin.md) | Environments, executions, the plugin page and API |
 | [Python SDK](python-sdk.md) | `scraperack-python`: running functions from your code |
+| [Queue plugin](queue-plugin.md) | Queues fed to runner plugins: settings, retries, the API, the runner contract |
 | [Workspaces plugin](workspaces-plugin.md) | Long-lived desktops: setup, how volumes, suspend and moves work, the API |
 | [Proxies plugin](proxies-plugin.md) | Proxy sources, testing, the proxy API and keys, SQLite storage |
 
