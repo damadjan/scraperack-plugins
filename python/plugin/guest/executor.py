@@ -84,8 +84,7 @@ def execute(payload):
                 raise ValueError("function hash does not match payload")
             FUNCTIONS[key] = cloudpickle.loads(data)
         params = cloudpickle.loads(base64.b64decode(payload["params"]))
-        kwargs = cloudpickle.loads(base64.b64decode(payload["kwargs"])) if payload.get("kwargs") else {}
-        return FUNCTIONS[key](*params, **kwargs)
+        return FUNCTIONS[key](*params)
     if encoding == "python-source":
         namespace = {}
         exec(payload["source"], namespace)
