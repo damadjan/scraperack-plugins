@@ -1,6 +1,7 @@
 # Python SDK
 
-`scraperack-python` runs Python functions through the [Python plugin](python-plugin.md). It
+`scraperack-python` calls Python functions in the [Python plugin](python-plugin.md)'s warm
+environments. It
 builds on the core client [`scraperack`](https://github.com/damadjan/scraperack/blob/main/docs/sdk.md),
 which is installed with it and available as `py.cluster`.
 
@@ -44,10 +45,15 @@ with Python("http://controller:7070") as py:
 | Argument | Meaning |
 |---|---|
 | `environment` | Environment name or ID |
-| `function`, `params` | Called as `function(*params)`; `call` takes the params directly |
+| `function`, `params` | Called as `function(*params, **kwargs)`; `call` takes them directly |
+| `kwargs` | `run` only: keyword arguments for the function |
 | `variables`, `secrets` | Read inside with `scraperack_runtime.variable()` and `secret()` |
 | `working_dir` | A local folder uploaded once (content-addressed), importable and the working directory during the call |
 | `queue` | `False` fails at once instead of waiting when the environment is at `max_instances` |
+
+`call(environment, function, *args, **kwargs)` passes every keyword to the function except
+its own options `queue`, `variables`, `secrets` and `working_dir`. For a function argument
+with one of those names, use `run(..., kwargs={...})`.
 
 Return values come back as JSON when possible, otherwise pickled.
 

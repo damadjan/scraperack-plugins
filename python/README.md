@@ -1,7 +1,10 @@
 # Python plugin
 
-Runs Python functions in Scraperack microVMs: environments with pinned pip packages and
-warm microVMs, and an Executions view of every call with its output.
+Warm Python environments on Scraperack. An environment's pip packages are built once and
+its modules are imported before the microVM snapshot is taken, so every microVM restored
+from it starts with the interpreter running and the imports done. Call a function from
+the [SDK](sdk/) and it lands in a ready interpreter; each call is kept as an execution
+with its result and output.
 
 ```text
 plugin/         the installable plugin (pack this folder)

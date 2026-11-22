@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scraperack-python"
-version = "0.1.0a1"
-description = "Run Python functions on a self-hosted Scraperack cluster through its Python plugin"
+version = "0.1.0a2"
+description = "Warm Python environments on a self-hosted Scraperack cluster: run functions in pre-imported, snapshotted microVMs"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["scraperack>=0.3.0a1", "cloudpickle>=3"]
+dependencies = ["scraperack>=0.3.0a1", "cloudpickle>=3.1,<3.2"]
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 classifiers = ["Development Status :: 3 - Alpha"]

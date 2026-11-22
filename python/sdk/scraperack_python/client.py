@@ -28,7 +28,8 @@ class RemoteError(RuntimeError):
 
 
 def function_payload(
-    function: Callable[..., Any], params: Sequence[Any] = (), working_dir: str | None = None
+    function: Callable[..., Any], params: Sequence[Any] = (), working_dir: str | None = None,
+    kwargs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Encode a function and its arguments for the Python executor."""
     data = cloudpickle.dumps(function)
@@ -38,6 +39,8 @@ def function_payload(
         "function": base64.b64encode(data).decode(),
         "params": base64.b64encode(cloudpickle.dumps(tuple(params))).decode(),
     }
+    if kwargs:
+        payload["kwargs"] = base64.b64encode(cloudpickle.dumps(dict(kwargs))).decode()
     if working_dir:
         payload["working_dir"] = working_dir
         payload["cache_key"] = hashlib.sha256(data + working_dir.encode()).hexdigest()
@@ -152,17 +155,27 @@ class Python:
     def run(self, environment: str, function: Callable[..., Any], params: Sequence[Any] = (),
             queue: bool = True, variables: Mapping[str, str] | None = None,
             secrets: Mapping[str, str] | None = None,
-            working_dir: str | Path | None = None) -> Execution:
-        """Start ``function(*params)`` in an environment and return the execution."""
+            working_dir: str | Path | None = None,
+            kwargs: Mapping[str, Any] | None = None) -> Execution:
+        """Start ``function(*params, **kwargs)`` in an environment and return the execution."""
         digest = self.cluster.upload_working_dir(working_dir) if working_dir else None
-        payload = function_payload(function, params, digest)
+        payload = function_payload(function, params, digest, kwargs)
         return self._call("POST", "/executions",
                           json=_run_body(environment, payload, queue, variables, secrets))
 
-    def call(self, environment: str, function: Callable[..., Any], *params: Any,
-             **options: Any) -> Any:
-        """Run ``function(*params)`` and return its value; raises ``RemoteError`` on failure."""
-        return self.result(self.run(environment, function, params, **options)["id"])
+    def call(self, environment: str, function: Callable[..., Any], /, *params: Any,
+             queue: bool = True, variables: Mapping[str, str] | None = None,
+             secrets: Mapping[str, str] | None = None,
+             working_dir: str | Path | None = None, **kwargs: Any) -> Any:
+        """Run ``function(*params, **kwargs)`` and return its value.
+
+        Raises ``RemoteError`` on failure. ``queue``, ``variables``, ``secrets`` and
+        ``working_dir`` are options of the call; every other keyword goes to the function
+        (use ``run(..., kwargs=...)`` for a function argument with one of those names).
+        """
+        execution = self.run(environment, function, params, queue, variables, secrets,
+                             working_dir, kwargs)
+        return self.result(execution["id"])
 
     def executions(self, environment: str | None = None, limit: int = 200) -> list[Execution]:
         """Newest executions first, optionally of one environment."""
@@ -247,15 +260,19 @@ class AsyncPython:
                   params: Sequence[Any] = (), queue: bool = True,
                   variables: Mapping[str, str] | None = None,
                   secrets: Mapping[str, str] | None = None,
-                  working_dir: str | Path | None = None) -> Execution:
+                  working_dir: str | Path | None = None,
+                  kwargs: Mapping[str, Any] | None = None) -> Execution:
         digest = await self.cluster.upload_working_dir(working_dir) if working_dir else None
-        payload = function_payload(function, params, digest)
+        payload = function_payload(function, params, digest, kwargs)
         return await self._call("POST", "/executions",
                                 json=_run_body(environment, payload, queue, variables, secrets))
 
-    async def call(self, environment: str, function: Callable[..., Any], *params: Any,
-                   **options: Any) -> Any:
-        execution = await self.run(environment, function, params, **options)
+    async def call(self, environment: str, function: Callable[..., Any], /, *params: Any,
+                   queue: bool = True, variables: Mapping[str, str] | None = None,
+                   secrets: Mapping[str, str] | None = None,
+                   working_dir: str | Path | None = None, **kwargs: Any) -> Any:
+        execution = await self.run(environment, function, params, queue, variables, secrets,
+                                   working_dir, kwargs)
         return await self.result(execution["id"])
 
     async def executions(self, environment: str | None = None,

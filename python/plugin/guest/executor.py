@@ -2,7 +2,12 @@
 """Scraperack Python executor.
 
 Runs inside each microVM, started by the guest agent with the environment's
-virtualenv interpreter. Speaks length-prefixed JSON on the executor socket.
+virtualenv interpreter, before the pool's snapshot is taken: whatever it imports
+then is already loaded in every microVM restored from the snapshot. Speaks
+length-prefixed JSON on the executor socket.
+
+Payloads: python-function (a cloudpickled function, from the SDK) and
+python-source (source defining main(), used by the plugin's package builds).
 """
 import base64
 import hashlib
@@ -12,7 +17,6 @@ import json
 import os
 import shutil
 import socket
-import subprocess
 import sys
 import tempfile
 import traceback
@@ -32,6 +36,7 @@ FUNCTIONS = {}
 WORKING_DIRS = Path("/tmp/scraperack-working-dirs")
 STDOUT = tempfile.TemporaryFile(mode="w+")
 STDERR = tempfile.TemporaryFile(mode="w+")
+preloaded = False
 
 
 def encode(value):
@@ -45,17 +50,32 @@ def encode(value):
         }
 
 
+def preload(modules):
+    """Import the environment's preload modules before the snapshot is taken.
+
+    The same request arrives again after every restore; by then the modules are
+    loaded (the snapshot holds this process), so it returns at once.
+    """
+    global preloaded
+    if not preloaded:
+        for module in modules:
+            loaded = importlib.import_module(module)
+            if module == "requests":
+                # The first request loads the rest of the HTTP stack; a refused local
+                # connection is enough to pull it in.
+                try:
+                    loaded.get("http://127.0.0.1:1", timeout=1)
+                except loaded.RequestException:
+                    pass
+        preloaded = True
+    return modules
+
+
 def execute(payload):
     encoding = payload["encoding"]
     if encoding == "scraperack-preload":
-        for module in payload.get("modules", []):
-            loaded = importlib.import_module(module)
-            if module == "requests":
-                try:
-                    loaded.get(payload.get("url", "http://127.0.0.1:1"), timeout=1)
-                except loaded.RequestException:
-                    pass
-        return payload.get("modules", [])
+        # Older guest agents name the list "modules".
+        return preload(payload.get("preload", payload.get("modules", [])))
     if encoding == "python-function":
         key = payload.get("cache_key", payload["hash"])
         if key not in FUNCTIONS:
@@ -64,10 +84,8 @@ def execute(payload):
                 raise ValueError("function hash does not match payload")
             FUNCTIONS[key] = cloudpickle.loads(data)
         params = cloudpickle.loads(base64.b64decode(payload["params"]))
-        return FUNCTIONS[key](*params)
-    if encoding == "cloudpickle":
-        function, params = cloudpickle.loads(base64.b64decode(payload["data"]))
-        return function(*params)
+        kwargs = cloudpickle.loads(base64.b64decode(payload["kwargs"])) if payload.get("kwargs") else {}
+        return FUNCTIONS[key](*params, **kwargs)
     if encoding == "python-source":
         namespace = {}
         exec(payload["source"], namespace)
@@ -75,29 +93,6 @@ def execute(payload):
         if not callable(function):
             raise ValueError("python-source must define main(...)")
         return function(*payload.get("params", []))
-    if encoding == "files":
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for name, data in payload["files"].items():
-                path = Path(name)
-                if path.is_absolute() or ".." in path.parts:
-                    raise ValueError(f"invalid file path: {name}")
-                target = root / path
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(base64.b64decode(data))
-            command = payload["command"]
-            process = subprocess.run(
-                command, cwd=root, shell=isinstance(command, str), capture_output=True, text=True
-            )
-            if process.returncode:
-                raise RuntimeError(f"command exited {process.returncode}\n{process.stderr}")
-            return {
-                "returncode": process.returncode,
-                "stdout": process.stdout,
-                "stderr": process.stderr,
-            }
-    if encoding == "json":
-        return payload.get("data")
     raise ValueError(f"unknown payload encoding: {encoding}")
 
 
@@ -150,16 +145,6 @@ def unload_modules(directory):
 
 
 def handle(payload):
-    if payload["encoding"] == "scraperack-describe":
-        return {
-            "result": {
-                "value": {"encoding": "json", "data": f"Python {sys.version.split()[0]}"},
-                "stdout": "",
-                "stderr": "",
-            },
-            "error": None,
-            "timed_out": False,
-        }
     if payload["encoding"] == "scraperack-invocation":
         variables = payload.get("variables", {})
         secrets = payload.get("secrets", {})
