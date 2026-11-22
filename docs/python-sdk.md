@@ -57,6 +57,46 @@ with one of those names, use `run(..., kwargs={...})`.
 
 Return values come back as JSON when possible, otherwise pickled.
 
+## Queues
+
+With the [queue plugin](queue-plugin.md), a call can wait in a queue instead of starting
+now. `bind` builds the call without starting it; then `run()` starts it now, or `put()`
+hands it to a queue, which starts it when the queue has room.
+
+```python
+with Python("http://controller:7070") as py:
+    upwork = py.queue("upwork")
+    upwork.configure(concurrency=20, rate_per_minute=300, max_attempts=3)
+
+    call = py.bind("scrapers", fetch, "https://example.com", secrets={"TOKEN": "..."})
+    call.run()                      # start now: an execution
+    job_id = call.put("upwork")     # or queue it: a job id
+
+    ids = upwork.put_many(py.bind("scrapers", fetch, url) for url in urls)   # 500 per request
+    print(upwork.info()["counts"])  # queued, running, done, failed, cancelled
+    print(upwork.job(job_id)["reason"])
+```
+
+`bind(environment, function, *args, **kwargs)` takes the same options as `call`
+(`variables`, `secrets`, `working_dir`); every other keyword goes to the function. A working
+directory is uploaded when the call is bound.
+
+Queued jobs return nothing: the function sends its results where they belong (a database,
+files, an upload). A job only has a status and a reason.
+
+| `py.queue(name)` | |
+|---|---|
+| `configure(**settings)` | Create the queue or change settings: `concurrency`, `rate_per_minute`, `max_attempts`, `retry_code_errors`, `timeout_secs`, `max_queued`, `paused` |
+| `info()` | Settings and counts |
+| `put(call)`, `put_many(calls)` | Add jobs; a full queue raises `scraperack.APIError` with status 429 |
+| `jobs(status=None, limit=100)`, `job(id)` | Job metadata; `job` adds the attempts and their execution ids |
+| `cancel(id)`, `cancel_waiting(running=False)` | Cancel one job, or every waiting one |
+| `delete()` | Delete the queue |
+
+`put` also takes a raw job `{"runner": ..., "input": {...}}`, so a Python program can queue
+work for other runners. `py.queues()` lists every queue. `AsyncPython` has the same methods;
+`await py.bind(...)` and `await call.put(...)`.
+
 ## Executions
 
 ```python

@@ -59,3 +59,58 @@ class Execution(TypedDict):
 class ExecutionDetails(Execution):
     logs: ExecutionLogs
     result: EncodedValue | None
+
+
+JobStatus = Literal["queued", "running", "done", "failed", "cancelled"]
+
+
+class QueueCounts(TypedDict):
+    queued: int
+    running: int
+    done: int
+    failed: int
+    cancelled: int
+    finished_last_minute: int
+
+
+class QueueView(TypedDict):
+    """A queue of the queue plugin: its settings and job counts."""
+
+    name: str
+    concurrency: int
+    rate_per_minute: int | None
+    max_attempts: int
+    retry_code_errors: bool
+    timeout_secs: int | None
+    max_queued: int
+    paused: bool
+    created_ms: int
+    counts: QueueCounts
+
+
+class Job(TypedDict):
+    """A queued job's metadata; the queue keeps nothing the job produced."""
+
+    id: str
+    queue: str
+    runner: str
+    status: JobStatus
+    reason: str | None
+    attempts: int
+    run_id: str | None
+    created_ms: int
+    started_ms: int | None
+    finished_ms: int | None
+
+
+class Attempt(TypedDict):
+    number: int
+    run_id: str | None
+    started_ms: int
+    finished_ms: int | None
+    outcome: Literal["done", "failed", "cancelled"] | None
+    reason: str | None
+
+
+class JobDetails(Job):
+    attempts_detail: list[Attempt]

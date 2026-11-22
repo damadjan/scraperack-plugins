@@ -21,6 +21,7 @@ import pickletools
 import re
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tarfile
@@ -692,6 +693,124 @@ def execution_route(method, parts, body, query):
     return None
 
 
+# --- Runs: the runner contract ------------------------------------------------------
+#
+# The same executions behind a shape every runtime plugin shares, so the queue plugin
+# can feed work to Python (and later other languages) without knowing the language:
+#   POST /runs {key, input}   GET /runs/{id}   GET /runs?ids=a,b   POST /runs/{id}/stop
+# `key` makes a submit idempotent: a caller that crashed after submitting sends the same
+# key again and gets the run it already started instead of a second one.
+
+RUNS_DB = DATA / "runs.db"
+RUN_KEY_HOURS = 48      # longer than the core keeps finished tasks
+run_db_lock = threading.Lock()
+run_db = None
+run_key_locks = [threading.Lock() for _ in range(64)]
+
+
+def runs_db():
+    global run_db
+    if run_db is None:
+        DATA.mkdir(parents=True, exist_ok=True)
+        run_db = sqlite3.connect(RUNS_DB, check_same_thread=False, isolation_level=None)
+        run_db.execute("PRAGMA journal_mode=WAL")
+        run_db.execute("CREATE TABLE IF NOT EXISTS run_keys (key TEXT PRIMARY KEY, "
+                       "task TEXT NOT NULL, created_ms INTEGER NOT NULL)")
+    return run_db
+
+
+def prune_run_keys():
+    cutoff = int(time.time() * 1000) - RUN_KEY_HOURS * 3600 * 1000
+    with run_db_lock:
+        runs_db().execute("DELETE FROM run_keys WHERE created_ms < ?", (cutoff,))
+
+
+def failure_of(task):
+    """Why a run failed, in the contract's terms: code, timeout, stopped or infrastructure."""
+    if task["status"] == "timed_out":
+        return "timeout"
+    if task["status"] != "failed":
+        return None
+    error = task.get("error") or ""
+    if error.startswith("Traceback (most recent call last)"):
+        return "code"           # the executor caught an exception from the user's function
+    if error in ("task was stopped", "stopped before it started"):
+        return "stopped"
+    return "infrastructure"
+
+
+def run_view(task):
+    status = task["status"]
+    error = task.get("error")
+    return {
+        "id": task["id"],
+        "status": {"assigned": "queued"}.get(status, status),
+        "failure": failure_of(task),
+        "error": error[-2000:] if error else None,
+        "started_at_ms": task.get("started_at_ms"),
+        "finished_at_ms": task.get("finished_at_ms"),
+    }
+
+
+def submit_run(body):
+    key = str(body.get("key") or "")
+    run_input = body.get("input")
+    if not isinstance(run_input, dict):
+        raise ApiError(400, "input must be an object: {environment, payload, variables, secrets}")
+    if not key:
+        return run_view(submit_execution({**run_input, "queue": True}))
+    if len(key) > 200:
+        raise ApiError(400, "key is limited to 200 characters")
+    with run_key_locks[hash(key) % len(run_key_locks)]:
+        with run_db_lock:
+            row = runs_db().execute("SELECT task FROM run_keys WHERE key = ?", (key,)).fetchone()
+        if row:
+            return run_details(row[0])
+        execution = submit_execution({**run_input, "queue": True})
+        with run_db_lock:
+            runs_db().execute("INSERT OR REPLACE INTO run_keys VALUES (?, ?, ?)",
+                              (key, execution["id"], int(time.time() * 1000)))
+    return run_view(execution)
+
+
+def run_details(run_id):
+    try:
+        return run_view(owned_task(run_id))
+    except ApiError as error:
+        if error.status != 404:
+            raise
+        return {"id": run_id, "status": "unknown", "failure": None, "error": None,
+                "started_at_ms": None, "finished_at_ms": None}
+
+
+def prune_run_keys_forever():
+    while True:
+        try:
+            prune_run_keys()
+        except sqlite3.Error:
+            traceback.print_exc()
+        time.sleep(3600)
+
+
+def run_route(method, parts, body, query):
+    if parts == ["runs"]:
+        if method == "POST":
+            return 202, submit_run(body)
+        if method == "GET":
+            ids = [item for item in ",".join(query.get("ids") or []).split(",") if item]
+            if len(ids) > 500:
+                raise ApiError(400, "ask for at most 500 runs at once")
+            return 200, [run_details(run_id) for run_id in ids]
+    if len(parts) == 2 and parts[0] == "runs" and method == "GET":
+        return 200, run_details(parts[1])
+    if len(parts) == 3 and parts[0] == "runs" and parts[2] == "stop" and method == "POST":
+        task = owned_task(parts[1])
+        if task["status"] not in FINISHED:
+            core("POST", f"/v1/tasks/{task['id']}/stop", {})
+        return 202, run_details(task["id"])
+    return None
+
+
 # --- HTTP -------------------------------------------------------------------------
 
 def route(method, path, body, query=None):
@@ -703,7 +822,8 @@ def route(method, path, body, query=None):
     if parts[:1] != ["api"]:
         raise ApiError(404, "not found")
     parts = parts[1:]
-    handled = execution_route(method, parts, body, query or {})
+    handled = (execution_route(method, parts, body, query or {})
+               or run_route(method, parts, body, query or {}))
     if handled is not None:
         return handled
     if parts == ["images"] and method == "GET":
@@ -739,6 +859,9 @@ class Handler(BaseHTTPRequestHandler):
         return "core"
 
     def log_message(self, format, *args):
+        # The queue plugin polls runs every second; only their failures are worth a line.
+        if "/api/runs" in self.path and len(args) > 1 and str(args[1]) < "400":
+            return
         print(f"{self.command} {self.path} {args[1] if len(args) > 1 else ''}", file=sys.stderr)
 
     def send(self, status, payload, content_type="application/json"):
@@ -780,6 +903,7 @@ def main():
     server = ThreadingUnixStreamServer(PLUGIN_SOCKET, Handler)
     server.daemon_threads = True
     threading.Thread(target=reconcile, daemon=True).start()
+    threading.Thread(target=prune_run_keys_forever, daemon=True).start()
     print(f"{PLUGIN} plugin listening on {PLUGIN_SOCKET}", file=sys.stderr, flush=True)
     server.serve_forever()
 

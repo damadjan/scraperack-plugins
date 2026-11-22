@@ -86,8 +86,12 @@ Served at `http://<controller>:7070/plugins/python/api/`:
 | `POST /executions` | `{environment, payload, queue, variables, secrets}`; `payload` is a `python-function` |
 | `GET /executions/{id}` | One execution with logs and result |
 | `GET /executions/{id}/wait`, `/result`, `/logs`, `/payload` | As the core task endpoints |
+| `POST /runs`, `GET /runs?ids=`, `GET /runs/{id}`, `POST /runs/{id}/stop` | The [runner contract](queue-plugin.md#runner-contract), used by the queue plugin; `input` is the `POST /executions` body |
 
-Each execution is a core task on the environment's pool; IDs are the same.
+Each execution is a core task on the environment's pool; IDs are the same. Runs are the same
+executions: a run's id is its execution's id. A run fails with `code` when the function
+raised, `timeout`, `stopped`, or otherwise `infrastructure`. Run keys are kept for 48 hours
+in `runs.db`.
 
 ## Environments from before plugins
 
