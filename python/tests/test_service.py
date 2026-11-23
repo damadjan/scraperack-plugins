@@ -23,6 +23,7 @@ class FakeCore:
                         "docker_source": "sha256:1"}]
         self.calls = []
         self.tasks = {}
+        self.ids_filter = True
 
     def tasks_api(self, method, path, body):
         service = sys.modules["service"]
@@ -39,9 +40,12 @@ class FakeCore:
         if not parts and method == "GET":
             query = parse_qs(url.query)
             pools = query.get("pool", [""])[0].split(",") if "pool" in query else None
+            ids = query["ids"][0].split(",") if "ids" in query and self.ids_filter else None
+            limit = int(query["limit"][0]) if "limit" in query else None
             return [self.view(task) for task in reversed(self.tasks.values())
                     if task["owner"] == query["owner"][0]
-                    and (pools is None or task["pool"] in pools)]
+                    and (pools is None or task["pool"] in pools)
+                    and (ids is None or task["id"] in ids)][:limit]
         task = self.tasks.get(parts[0])
         if task is None:
             raise service.ApiError(404, "task not found")
@@ -298,9 +302,17 @@ class ServiceTests(unittest.TestCase):
         tasks[run["id"]].update(status="succeeded")
         tasks[other["id"]].update(status="failed",
                                   error="Traceback (most recent call last):\nValueError: boom")
-        _, runs = self.request("GET", "/api/runs", query={"ids": [f'{run["id"]},{other["id"]},gone']})
-        self.assertEqual([(item["status"], item["failure"]) for item in runs],
-                         [("succeeded", None), ("failed", "code"), ("unknown", None)])
+        ids = {"ids": [f'{run["id"]},{other["id"]},gone']}
+        expected = [("succeeded", None), ("failed", "code"), ("unknown", None)]
+        self.core.calls.clear()
+        _, runs = self.request("GET", "/api/runs", query=ids)
+        self.assertEqual([(item["status"], item["failure"]) for item in runs], expected)
+        self.assertEqual(len(self.core.calls), 1)       # one core query for every run
+        # An older core ignores the ids filter and lists its newest tasks instead.
+        self.core.ids_filter = False
+        _, runs = self.request("GET", "/api/runs", query=ids)
+        self.assertEqual([(item["status"], item["failure"]) for item in runs], expected)
+        self.core.ids_filter = True
 
         _, third = self.request("POST", "/api/runs", {"key": "job-2/1", "input": run_input})
         _, stopped = self.request("POST", f'/api/runs/{third["id"]}/stop')
