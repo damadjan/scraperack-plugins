@@ -779,8 +779,30 @@ def run_details(run_id):
     except ApiError as error:
         if error.status != 404:
             raise
-        return {"id": run_id, "status": "unknown", "failure": None, "error": None,
-                "started_at_ms": None, "finished_at_ms": None}
+        return unknown_run(run_id)
+
+
+def runs_details(ids):
+    """Many runs in one core query; unknown ids come back as status "unknown"."""
+    wanted = set(ids)
+    found, complete = {}, False
+    try:
+        listed = core("GET", "/v1/tasks?" + urlencode(
+            {"owner": OWNER, "ids": ",".join(ids), "limit": len(ids)}))
+        found = {task["id"]: task for task in listed if task["id"] in wanted}
+        # A core without the ids filter lists its newest tasks instead.
+        complete = all(task["id"] in wanted for task in listed)
+    except ApiError as error:
+        if error.status != 400:     # a malformed id: look each one up
+            raise
+    return [run_view(found[run_id]) if run_id in found
+            else unknown_run(run_id) if complete else run_details(run_id)
+            for run_id in ids]
+
+
+def unknown_run(run_id):
+    return {"id": run_id, "status": "unknown", "failure": None, "error": None,
+            "started_at_ms": None, "finished_at_ms": None}
 
 
 def prune_run_keys_forever():
@@ -800,7 +822,7 @@ def run_route(method, parts, body, query):
             ids = [item for item in ",".join(query.get("ids") or []).split(",") if item]
             if len(ids) > 500:
                 raise ApiError(400, "ask for at most 500 runs at once")
-            return 200, [run_details(run_id) for run_id in ids]
+            return 200, runs_details(ids) if ids else []
     if len(parts) == 2 and parts[0] == "runs" and method == "GET":
         return 200, run_details(parts[1])
     if len(parts) == 3 and parts[0] == "runs" and parts[2] == "stop" and method == "POST":
