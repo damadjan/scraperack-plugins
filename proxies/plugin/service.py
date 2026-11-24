@@ -516,6 +516,36 @@ class Scheduler:
             time.sleep(LOOP_SECONDS)
 
 
+# --- Capacity ----------------------------------------------------------------------
+
+def capacity_report():
+    """Trusted proxies are what programs get; the test rate caps how fast new ones are found."""
+    cfg = store.get_settings()
+    counts = store.capacity_counts()
+    return {
+        "output": {"label": "Trusted proxies", "ready": counts["trusted"], "unit": "proxies"},
+        "resources": [
+            {"label": "Alive", "used": counts["alive"], "unit": "proxies"},
+            {"label": "Untested", "used": counts["new"], "unit": "proxies"},
+            # The rate only limits anything while untested proxies wait for it.
+            {"label": "Test rate", "used": round(scheduler.rate),
+             "total": cfg["test_rate_max"] if counts["new"] else None,
+             "unit": "conn/s", "hint": "Raise test_rate_max if the network link can take it"},
+        ],
+    }
+
+
+def report_capacity_forever():
+    """Tell the core what this plugin delivers and what limits it, for the homepage funnels.
+    Reports expire after 30 seconds, so a stuck plugin drops off on its own."""
+    while True:
+        try:
+            core("PUT", "/v1/capacity", capacity_report())
+        except Exception:  # noqa: BLE001 - best effort; the next round tries again
+            pass
+        time.sleep(10)
+
+
 # --- HTTP --------------------------------------------------------------------------
 
 scheduler = None
@@ -729,6 +759,7 @@ def main():
     server.daemon_threads = True
     threading.Thread(target=geo.refresh, daemon=True).start()
     threading.Thread(target=scheduler.run, daemon=True).start()
+    threading.Thread(target=report_capacity_forever, daemon=True).start()
     print(f"{PLUGIN} plugin listening on {PLUGIN_SOCKET}", file=sys.stderr, flush=True)
     server.serve_forever()
 

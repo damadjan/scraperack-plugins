@@ -767,6 +767,13 @@ def stats():
     }
 
 
+def capacity_counts():
+    """The few counts the homepage needs, without the full stats breakdown."""
+    row = rows("SELECT COALESCE(SUM(status = 'alive'), 0) AS alive, COALESCE(SUM(status = 'new'), 0) AS new, "
+               "COALESCE(SUM(status = 'alive' AND https = 1 AND intercepts = 0), 0) AS trusted FROM proxies")[0]
+    return {key: int(row[key]) for key in ('alive', 'new', 'trusted')}
+
+
 def last_runs():
     out = {}
     for kind in ('scrape', 'test'):

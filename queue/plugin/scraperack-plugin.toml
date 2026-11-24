@@ -1,5 +1,5 @@
 name = "queue"
-version = "0.1.0"
+version = "0.1.1"
 description = "Queues of jobs fed to runner plugins (Python today) as long as each queue has room: concurrency, start rate, retries. Jobs keep only their status; data in SQLite on the controller."
 run = ["python3", "service.py"]
 gui = true
