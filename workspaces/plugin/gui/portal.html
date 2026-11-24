@@ -453,7 +453,7 @@ async function openCreate(templateId) {
     </label>`).join("")
     : `<div class="note error">No template is ready yet. <a href="#/templates" data-close>Add one on the Templates tab.</a></div>`;
   form.disk_gib.value = chosen?.disk_gib || 10;
-  form.timezone.value = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  form.timezone.value = timeZone || "UTC";
   form.name.value = "";
   $("create-note").textContent = "";
   $("create-note").className = "note";
@@ -745,13 +745,20 @@ function route() {
   if (location.hash.startsWith("#/w/")) enterSession();
   else leaveSession();
 }
+// Times use the cluster's display timezone, set in the core GUI's Settings.
+let timeZone;
+const zoneReady = fetch("/v1/settings/timezone").then(r => r.json())
+  .then(setting => { timeZone = setting.timezone; }).catch(() => {});
+const clock = () => new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit", timeZone});
 window.addEventListener("hashchange", route);
 setInterval(() => {
-  $("clock").textContent = new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  $("clock").textContent = clock();
   tickElapsed();
 }, 1000);
-$("clock").textContent = new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
-route();
+zoneReady.then(() => {
+  $("clock").textContent = clock();
+  route();
+});
 </script>
 </body>
 </html>

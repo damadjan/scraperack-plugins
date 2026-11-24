@@ -69,6 +69,12 @@ plugin:
 | `/v1/tasks` | Send payloads to a pool's executor and read results, logs, metrics |
 | `/v1/volumes` | Persistent disks a task mounts at its pool's `volume_mount`; suspend and resume with `POST /v1/tasks/{id}/stop` |
 | `/v1/vms`, `/v1/nodes` | Live inventory |
+| `/v1/settings/timezone` | The cluster's display timezone |
+
+Never keep a timezone setting of your own. Times a plugin shows, on its page or formatted on
+the server, use the core's display timezone. A page fetches `/v1/settings/timezone` from its
+own origin and passes it as `timeZone` to `toLocaleString`. See
+[Display timezone](https://github.com/damadjan/scraperack/blob/main/docs/api.md#display-timezone).
 
 A plugin that turns tasks into something users recognize (executions, crawls, sessions)
 should own that view: list its tasks, describe their payloads, and show them on its page.

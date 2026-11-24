@@ -326,12 +326,16 @@ const details = document.getElementById("details");
 let executions = [], tab = "environments";
 
 const seconds = ms => ms == null ? "—" : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`;
-const when = ms => ms ? new Date(ms).toLocaleString() : "—";
+// Times use the cluster's display timezone, set in the core GUI's Settings.
+let timeZone;
+const zoneReady = fetch("/v1/settings/timezone").then(r => r.json())
+  .then(setting => { timeZone = setting.timezone; }).catch(() => {});
+const when = ms => ms ? new Date(ms).toLocaleString(undefined, {timeZone}) : "—";
 function ago(ms) {
   if (!ms) return "—";
   const s = Math.max(0, (Date.now() - ms) / 1000);
   return s < 60 ? `${Math.floor(s)}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago`
-    : s < 86400 ? `${Math.floor(s / 3600)}h ago` : new Date(ms).toLocaleDateString();
+    : s < 86400 ? `${Math.floor(s / 3600)}h ago` : new Date(ms).toLocaleDateString(undefined, {timeZone});
 }
 const pill = status => `<span class="pill ${escape(status)}">${escape(status.replace("_", " "))}</span>`;
 const fn = run => run.function ? escape(run.function) : `<span class="muted">${escape(run.encoding || "unknown")}</span>`;
@@ -426,7 +430,7 @@ async function tick() {
 }
 
 show(location.hash.slice(1));
-loadImages().then(tick).catch(error => setNotice(error.message, true));
+zoneReady.then(loadImages).then(tick).catch(error => setNotice(error.message, true));
 setInterval(tick, 3000);
 </script>
 </body>

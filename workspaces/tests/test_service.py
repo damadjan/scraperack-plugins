@@ -59,6 +59,8 @@ class FakeCore:
             return self.vms
         if parts[0] == "nodes":
             return [{"id": "node-1", "name": "worker1"}]
+        if parts == ["settings", "timezone"]:
+            return {"timezone": "Europe/Sofia"}
         if parts[0] == "images":
             return []
         raise AssertionError(f"unexpected core call {method} {path}")
@@ -108,6 +110,7 @@ class WorkspacesTest(unittest.TestCase):
         workspace = self.route("POST", "workspaces", {"name": "dev", "disk_gib": 5})
         self.assertEqual(workspace["status"], "queued")
         self.assertEqual(self.core.volumes[workspace["volume"]]["size_mib"], 5120)
+        self.assertEqual(workspace["timezone"], "Europe/Sofia")
         self.assertEqual((workspace["template"], workspace["template_name"]), (template["id"], "xfce"))
         self.assertEqual(self.route("GET", "templates/xfce")["workspaces"], 1)
         request = self.core.tasks[workspace["task"]]["request"]
