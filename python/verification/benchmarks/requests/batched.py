@@ -1,3 +1,4 @@
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -12,7 +13,7 @@ def request():
     return response.status_code, time.perf_counter() - start
 
 
-py = Python("http://192.168.2.15:7070")
+py = Python(os.environ["SCRAPERACK_URL"], os.environ["SCRAPERACK_API_KEY"])
 
 
 def execute(_):

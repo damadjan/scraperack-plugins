@@ -1,3 +1,4 @@
+import os
 import time
 
 from scraperack_python import Python
@@ -13,7 +14,7 @@ def resize():
     return time.perf_counter() - start, result
 
 
-py = Python("http://192.168.2.15:7070")
+py = Python(os.environ["SCRAPERACK_URL"], os.environ["SCRAPERACK_API_KEY"])
 start = time.perf_counter()
 execution = py.run(environment="pillow", function=resize)
 elapsed, result = py.result(execution["id"])

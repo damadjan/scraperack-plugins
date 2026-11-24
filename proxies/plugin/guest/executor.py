@@ -1,9 +1,8 @@
 #!/usr/bin/python3
-"""Proxies plugin executor, for images whose guest agent runs the pool's executor.
+"""Proxies plugin executor, started by the guest agent for the plugin's pools.
 
-The plugin sends its code as `python-source` payloads ({"source": ..., "params": [...]}, the
-source defines main(*params)), the format the Python executor baked into older images also
-runs, so the same pools work on both. Values come back as {"encoding": "json", "data": ...}.
+The plugin sends its code as `python-source` payloads ({"source": ..., "params": [...]}; the
+source defines main(*params)). Values come back as {"encoding": "json", "data": ...}.
 """
 import importlib
 import json
@@ -20,9 +19,9 @@ def execute(payload):
         payload = payload["payload"]
     encoding = payload.get("encoding")
     if encoding == "scraperack-preload":
-        for module in payload.get("modules", []):
+        for module in payload["preload"]:
             importlib.import_module(module)
-        return payload.get("modules", [])
+        return payload["preload"]
     if encoding == "scraperack-describe":
         return f"proxies executor, Python {sys.version.split()[0]}"
     if encoding == "python-source":

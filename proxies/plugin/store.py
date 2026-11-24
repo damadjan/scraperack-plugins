@@ -16,7 +16,7 @@ import json
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import datetime, timedelta, UTC
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
@@ -96,8 +96,6 @@ CREATE TABLE IF NOT EXISTS events (
     level TEXT NOT NULL,
     message TEXT NOT NULL
 );
--- API keys moved to Scraperack itself in 0.2.0.
-DROP TABLE IF EXISTS api_keys;
 """
 
 DEFAULT_JUDGES = 'http://httpbin.org/get\nhttp://azenv.net/\nhttp://proxyjudge.us/azenv.php'
@@ -107,10 +105,6 @@ DEFAULT_JUDGES = 'http://httpbin.org/get\nhttp://azenv.net/\nhttp://proxyjudge.u
 DEFAULT_HTTPS_URLS = ('https://httpbin.org/ip\nhttps://www.cloudflare.com/cdn-cgi/trace\n'
                       'https://www.google.com/generate_204\nhttps://www.apple.com/library/test/success.html\n'
                       'https://detectportal.firefox.com/success.txt')
-OLD_DEFAULTS = {'https_test_url': ('https://httpbin.org/ip',)}   # replaced by the new default
-# Columns added after the first release: (name, definition), added on startup when missing.
-MIGRATIONS = (('https_latency_ms', 'INTEGER'), ('intercepts', 'INTEGER NOT NULL DEFAULT 0'),
-              ('worked', 'INTEGER NOT NULL DEFAULT 0'), ('last_worked', 'TEXT'))
 REPORT_REASONS = ('worked', 'dead', 'intercepts')
 WORKED_RECENT_HOURS = 6   # sort=score puts proxies reported working this recently first
 
@@ -187,10 +181,6 @@ def open_db(path):
     conn = db()
     conn.execute('PRAGMA journal_mode=WAL')
     with write_lock:   # executescript commits on its own
-        columns = {row[1] for row in conn.execute('PRAGMA table_info(proxies)')}
-        for name, definition in MIGRATIONS:
-            if columns and name not in columns:
-                conn.execute(f'ALTER TABLE proxies ADD COLUMN {name} {definition}')
         conn.executescript(SCHEMA)
     seed()
     with write() as conn:   # nothing runs before the scheduler starts: these were cut off
@@ -242,12 +232,6 @@ def marks(values):
 def seed():
     with write() as conn:
         existing = {row[0] for row in conn.execute('SELECT key FROM settings')}
-        known = set(DEFAULTS) | set(STATUS_KEYS)
-        for key in existing - known:
-            conn.execute('DELETE FROM settings WHERE key = ?', (key,))
-        for key, old in OLD_DEFAULTS.items():   # untouched old defaults follow the new one
-            conn.execute(f'UPDATE settings SET value = ? WHERE key = ? AND value IN ({marks(old)})',
-                         (DEFAULTS[key][0], key, *old))
         conn.executemany('INSERT INTO settings (key, value) VALUES (?, ?)',
                          [(k, v[0]) for k, v in DEFAULTS.items() if k not in existing]
                          + [(k, '') for k in STATUS_KEYS if k not in existing])

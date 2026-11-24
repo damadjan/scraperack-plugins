@@ -47,7 +47,6 @@ HERE = Path(__file__).resolve().parent
 VENV_MOUNT = "/tmp/environment"
 GUEST_MOUNT = "/tmp/scraperack/python"
 STATE = DATA / "environments.json"
-MIGRATED = DATA / "migrated-environments.json"
 FUNCTIONS = DATA / "execution-functions-v2.json"
 FINISHED = {"succeeded", "failed", "timed_out"}
 # The SDK pickles functions with cloudpickle and the executor unpickles them; both sides
@@ -202,10 +201,9 @@ def require_guest_disk():
     return GUEST_DISK
 
 
-# Runs in a builder microVM with the image's own Python, as a python-source payload (which
-# this plugin's executor and the executor baked into older images both run). The venv is built
-# away from /tmp/environment, where older guest agents mount the first disk; a venv runs from
-# wherever it is mounted, because it finds itself from its own pyvenv.cfg.
+# Runs in a builder microVM with the image's own Python, as a python-source payload for this
+# plugin's executor. A venv runs from wherever it is mounted, because it finds itself from its
+# own pyvenv.cfg.
 BUILD_SOURCE = """
 import base64, glob, io, os, shutil, subprocess, tarfile
 
@@ -442,23 +440,6 @@ def delete_environment(key):
         unused_disk(environment.get("venv_disk"), state)
 
 
-def adopt_migrated():
-    """Take over environments the core created before plugins existed."""
-    if not MIGRATED.exists():
-        return
-    with lock:
-        state = load_state()
-        for legacy in json.loads(MIGRATED.read_text()):
-            if legacy["id"] in state:
-                continue
-            environment = normalize(legacy)
-            environment.update(id=legacy["id"], pool=legacy["pool"],
-                               venv_disk=legacy.get("artifact"))
-            state[environment["id"]] = environment
-        save_state(state)
-        MIGRATED.replace(MIGRATED.with_suffix(".adopted.json"))
-
-
 def reconcile():
     """Make the core's pools match this plugin's environments after a (re)start."""
     while True:
@@ -467,7 +448,6 @@ def reconcile():
             break
         except OSError:
             time.sleep(1)
-    adopt_migrated()
     with lock:
         environments = list(load_state().values())
     disks = {disk["key"] for disk in core("GET", "/v1/disks")}

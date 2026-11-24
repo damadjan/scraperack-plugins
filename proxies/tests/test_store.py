@@ -147,25 +147,6 @@ class StoreTest(unittest.TestCase):
         store.save_settings({"recheck_trusted_min": 0})
         self.assertEqual(store.pick_for_test(store.get_settings()), ([], 0))
 
-    def test_old_database_gets_new_columns_and_check_urls(self):
-        path = Path(self.directory.name) / "old.db"
-        import sqlite3
-        conn = sqlite3.connect(path)
-        conn.executescript("CREATE TABLE proxies (id INTEGER PRIMARY KEY, ip TEXT NOT NULL, port INTEGER NOT NULL, "
-                           "hint TEXT, protocol TEXT, https INTEGER NOT NULL DEFAULT 0, anonymity TEXT, "
-                           "latency_ms INTEGER, exit_ip TEXT, country TEXT, status TEXT NOT NULL DEFAULT 'new', "
-                           "source_count INTEGER NOT NULL DEFAULT 1, first_seen TEXT NOT NULL, last_checked TEXT, "
-                           "last_alive TEXT, checks INTEGER NOT NULL DEFAULT 0, successes INTEGER NOT NULL DEFAULT 0, "
-                           "fail_streak INTEGER NOT NULL DEFAULT 0, UNIQUE (ip, port));"
-                           "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
-                           "INSERT INTO settings VALUES ('https_test_url', 'https://httpbin.org/ip');")
-        conn.close()
-        store.db().close()
-        store.open_db(path)
-        columns = {row["name"] for row in store.rows("PRAGMA table_info(proxies)")}
-        self.assertTrue({"https_latency_ms", "intercepts", "worked", "last_worked"} <= columns)
-        self.assertEqual(store.get_settings()["https_test_url"], store.DEFAULT_HTTPS_URLS)
-
     def test_dead_that_worked_is_retested_with_backoff(self):
         store.add_sources(["https://a.example/list"])
         source = store.enabled_sources()[0]["id"]

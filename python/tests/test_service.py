@@ -1,6 +1,5 @@
 import base64
 import importlib
-import json
 import os
 import pickle
 import sys
@@ -214,24 +213,6 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.request("DELETE", "/api/environments/jobs"), (204, None))
         self.assertEqual(self.core.pools, {})
         self.assertNotIn("venv-2", self.core.disks)
-
-    def test_adopts_environments_migrated_by_the_core(self):
-        Path(self.directory.name, "migrated-environments.json").write_text(json.dumps([{
-            "id": "legacy-id", "name": "jobsites", "image": "img", "packages": ["requests==2.0"],
-            "preload": [], "artifact": "venv-1", "sha256": "x", "size": 1,
-            "pool": "environment-legacy-id-abc", "warm_instances": 2, "max_instances": 30,
-            "cpu_millis": 800, "memory_mib": 200, "disk_mib": 1024, "timeout_secs": 300,
-            "idle_timeout_secs": 30, "reuse": True, "network": True,
-        }]))
-        self.core.pools["environment-legacy-id-abc"] = {"name": "environment-legacy-id-abc"}
-        self.service.reconcile()
-        pool = self.core.pools["environment-legacy-id-abc"]
-        self.assertEqual(pool["aliases"], ["legacy-id", "jobsites"])
-        self.assertEqual(pool["warm_instances"], 2)
-        self.assertEqual(pool["disks"][0]["key"], "venv-1")
-        self.assertTrue(Path(self.directory.name, "migrated-environments.adopted.json").exists())
-        self.service.reconcile()
-        self.assertEqual(len(self.service.load_state()), 1)
 
     def test_cloudpickle_is_pinned_unless_the_environment_pins_it(self):
         self.assertEqual(self.service.with_cloudpickle(["httpx"]), ["cloudpickle==3.1.2", "httpx"])

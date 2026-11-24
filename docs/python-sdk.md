@@ -26,7 +26,7 @@ def fetch(url):
     return httpx.get(url, headers={"Authorization": secret("TOKEN")}).status_code
 
 
-with Python("http://controller:7070", api_key="sr_...") as py:
+with Python("http://controller:7070", "sr_...") as py:
     # Run and wait in one step; raises RemoteError with the traceback on failure.
     print(py.call("scrapers", fetch, "https://example.com",
                   variables={"MODE": "fast"}, secrets={"TOKEN": "..."}))
@@ -40,8 +40,9 @@ with Python("http://controller:7070", api_key="sr_...") as py:
     print(py.logs(execution["id"])["stdout"])
 ```
 
-`api_key` is a Scraperack API key that opens the python and queue plugins (and `core`, for
-`.cluster`); without it the client reads `SCRAPERACK_API_KEY`.
+`Python(url, api_key, *, plugin="python", queue_plugin="queue", client=None)`: `api_key` is a
+Scraperack API key that opens the python and queue plugins (and `core`, for `.cluster`, the
+core client it builds).
 
 `run` and `call` take:
 
@@ -67,7 +68,7 @@ now. `bind` builds the call without starting it; then `run()` starts it now, or 
 hands it to a queue, which starts it when the queue has room.
 
 ```python
-with Python("http://controller:7070") as py:
+with Python("http://controller:7070", "sr_...") as py:
     upwork = py.queue("upwork")
     upwork.configure(concurrency=20, rate_per_minute=300, max_attempts=3)
 
@@ -134,22 +135,10 @@ import asyncio
 from scraperack_python import AsyncPython
 
 async def main():
-    async with AsyncPython("http://controller:7070") as py:
+    async with AsyncPython("http://controller:7070", "sr_...") as py:
         results = await asyncio.gather(*(py.call("scrapers", fetch, url) for url in urls))
 
 asyncio.run(main())
-```
-
-## Sharing a core client
-
-Pass an existing `scraperack.Cluster` (or `AsyncCluster`) to reuse its connection:
-
-```python
-from scraperack import Cluster
-from scraperack_python import Python
-
-cluster = Cluster("http://controller:7070")
-py = Python(cluster)
 ```
 
 Runnable examples, one concept per file: [python/examples](../python/examples/).

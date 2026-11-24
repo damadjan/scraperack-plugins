@@ -245,20 +245,6 @@ def delete_template(key):
         save(TEMPLATES, templates)
 
 
-def migrate():
-    """Data from before templates were called desktops (plugin 0.3 and older)."""
-    old = DATA / "desktops.json"
-    with lock:
-        if old.exists() and not TEMPLATES.exists():
-            old.replace(TEMPLATES)
-        workspaces = load(WORKSPACES)
-        if any("desktop" in w for w in workspaces.values()):
-            for workspace in workspaces.values():
-                if "desktop" in workspace:
-                    workspace["template"] = workspace.pop("desktop")
-            save(WORKSPACES, workspaces)
-
-
 # --- Workspaces --------------------------------------------------------------------------------
 
 def update_workspace(workspace_id, **changes):
@@ -710,7 +696,6 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     DATA.mkdir(parents=True, exist_ok=True)
-    migrate()
     Path(PLUGIN_SOCKET).unlink(missing_ok=True)
     server = ThreadingUnixStreamServer(PLUGIN_SOCKET, Handler)
     server.daemon_threads = True

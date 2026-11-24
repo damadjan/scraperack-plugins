@@ -1,5 +1,4 @@
 import importlib
-import json
 import os
 import sys
 import tempfile
@@ -174,19 +173,6 @@ class WorkspacesTest(unittest.TestCase):
         self.assertNotIn(workspace["volume"], self.core.volumes)
         self.route("DELETE", f"templates/{large['id']}")
         self.assertFalse(self.core.pools)
-
-    def test_migrates_desktops_to_templates(self):
-        data = Path(self.data.name)
-        (data / "desktops.json").write_text(json.dumps({"d1": {
-            "id": "d1", "name": "xfce", "image": "img", "pool": "workspaces-d1",
-            "cpu_millis": 2000, "memory_mib": 2048, "disk_gib": 10}}))
-        (data / "workspaces.json").write_text(json.dumps({"w1": {
-            "id": "w1", "name": "dev", "desktop": "d1", "volume": "workspace-w1",
-            "status": "stopped", "task": None}}))
-        self.service.migrate()
-        self.assertFalse((data / "desktops.json").exists())
-        self.assertEqual(self.route("GET", "templates")[0]["name"], "xfce")
-        self.assertEqual(self.route("GET", "workspaces/dev")["template_name"], "xfce")
 
 
 if __name__ == "__main__":

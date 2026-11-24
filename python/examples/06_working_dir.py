@@ -8,7 +8,8 @@ from pathlib import Path
 
 from scraperack_python import Python
 
-URL = os.environ.get("SCRAPERACK_URL", "http://127.0.0.1:7070")
+URL = os.environ["SCRAPERACK_URL"]
+API_KEY = os.environ["SCRAPERACK_API_KEY"]
 ENVIRONMENT = os.environ.get("SCRAPERACK_ENV", "examples")
 PROJECT = Path(__file__).parent / "project"
 
@@ -20,5 +21,5 @@ def score_words():
         return scoring.rank(f.read().split())
 
 
-with Python(URL) as py:
+with Python(URL, API_KEY) as py:
     print(py.call(ENVIRONMENT, score_words, working_dir=PROJECT))

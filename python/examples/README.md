@@ -1,7 +1,7 @@
 # Examples
 
-One concept per file. Set `SCRAPERACK_URL` to your controller (default
-`http://127.0.0.1:7070`), run `01_create_environment.py` once, then any other file.
+One concept per file. Set `SCRAPERACK_URL` to your controller and `SCRAPERACK_API_KEY` to an
+API key that opens the python plugin, run `01_create_environment.py` once, then any other file.
 They use the environment `examples` (override with `SCRAPERACK_ENV`).
 
 ```sh

@@ -135,9 +135,6 @@ checksum.
 | `GET`, `PUT`, `DELETE /templates/{id or name}` | | Template; delete only without workspaces |
 | `GET /images` | | Scraperack's images, to pick one for a template |
 
-Plugin 0.4 renamed desktops to templates (`/desktops` and the `desktop` field are gone);
-existing data is converted when the plugin starts.
-
 Statuses: `stopped`, `queued`, `moving`, `starting`, `running`, `suspending`, `suspended`,
 `stopping`.
 
