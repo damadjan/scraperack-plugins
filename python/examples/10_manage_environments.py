@@ -3,11 +3,12 @@ import os
 
 from scraperack_python import Python
 
-URL = os.environ.get("SCRAPERACK_URL", "http://127.0.0.1:7070")
+URL = os.environ["SCRAPERACK_URL"]
+API_KEY = os.environ["SCRAPERACK_API_KEY"]
 ENVIRONMENT = os.environ.get("SCRAPERACK_ENV", "examples")
 DELETE = os.environ.get("DELETE") == "1"  # DELETE=1 removes the examples environment
 
-with Python(URL) as py:
+with Python(URL, API_KEY) as py:
     for e in py.environments():
         print(f"{e['name']}: {len(e['packages'])} packages, warm {e['warm_instances']}, "
               f"max {e['max_instances']}, ready={e['ready']}")

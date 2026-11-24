@@ -92,8 +92,3 @@ Each execution is a core task on the environment's pool; IDs are the same. Runs 
 executions: a run's id is its execution's id. A run fails with `code` when the function
 raised, `timeout`, `stopped`, or otherwise `infrastructure`. Run keys are kept for 48 hours
 in `runs.db`.
-
-## Environments from before plugins
-
-Environments created when Python support was built into the core are adopted
-automatically, keeping their IDs, names, and warm microVMs.

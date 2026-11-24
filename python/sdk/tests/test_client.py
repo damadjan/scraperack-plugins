@@ -6,7 +6,6 @@ from pathlib import Path
 
 import cloudpickle
 import httpx
-from scraperack import AsyncCluster, Cluster
 
 from scraperack_python import AsyncPython, Python, RemoteError, decode
 
@@ -16,8 +15,8 @@ def task(value):
 
 
 def mock(handler):
-    return Python(Cluster("http://controller", client=httpx.Client(
-        base_url="http://controller", transport=httpx.MockTransport(handler))))
+    return Python("http://controller", "sr_test", client=httpx.Client(
+        base_url="http://controller", transport=httpx.MockTransport(handler)))
 
 
 class PythonTests(unittest.TestCase):
@@ -204,7 +203,7 @@ class AsyncPythonTests(unittest.IsolatedAsyncioTestCase):
 
         client = httpx.AsyncClient(base_url="http://controller",
                                    transport=httpx.MockTransport(handler))
-        async with AsyncPython(AsyncCluster("http://controller", client=client)) as py:
+        async with AsyncPython("http://controller", "sr_test", client=client) as py:
             call = await py.bind("jobs", task, 1)
             self.assertEqual(await call.put("scrape"), "job")
         await client.aclose()
@@ -226,7 +225,7 @@ class AsyncPythonTests(unittest.IsolatedAsyncioTestCase):
             Path(directory, "helper.py").write_text("VALUE = 1", encoding="utf-8")
             client = httpx.AsyncClient(base_url="http://controller",
                                        transport=httpx.MockTransport(handler))
-            async with AsyncPython(AsyncCluster("http://controller", client=client)) as py:
+            async with AsyncPython("http://controller", "sr_test", client=client) as py:
                 execution = await py.run("jobs", task, working_dir=directory)
             await client.aclose()
 

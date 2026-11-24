@@ -3,10 +3,11 @@ import os
 
 from scraperack_python import Python
 
-URL = os.environ.get("SCRAPERACK_URL", "http://127.0.0.1:7070")
+URL = os.environ["SCRAPERACK_URL"]
+API_KEY = os.environ["SCRAPERACK_API_KEY"]
 ENVIRONMENT = os.environ.get("SCRAPERACK_ENV", "examples")
 
-with Python(URL) as py:
+with Python(URL, API_KEY) as py:
     executions = py.executions(environment=ENVIRONMENT, limit=20)  # newest first
     for e in executions:
         print(f"{e['id']}  {e['function'] or '?':<16} {e['status']:<10} "

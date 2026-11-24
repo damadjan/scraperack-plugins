@@ -12,6 +12,7 @@ from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import quote
 
 import cloudpickle
+import httpx
 from scraperack import AsyncCluster, Cluster
 from scraperack.types import FINISHED
 
@@ -25,7 +26,6 @@ from .types import (
     QueueView,
 )
 
-DEFAULT_URL = "http://127.0.0.1:7070"
 
 
 class RemoteError(RuntimeError):
@@ -112,10 +112,9 @@ def _key(value: str) -> str:
 class Python:
     """Synchronous client for Python environments and executions."""
 
-    def __init__(self, cluster: str | Cluster = DEFAULT_URL, *, api_key: str | None = None,
-                 plugin: str = "python", queue_plugin: str = "queue") -> None:
-        self._owns_cluster = isinstance(cluster, str)
-        self.cluster = Cluster(cluster, api_key=api_key) if isinstance(cluster, str) else cluster
+    def __init__(self, url: str, api_key: str, *, plugin: str = "python", queue_plugin: str = "queue",
+                 client: httpx.Client | None = None) -> None:
+        self.cluster = Cluster(url, api_key, client=client)
         self.api = f"/plugins/{_key(plugin)}/api"
         self.queue_api = f"/plugins/{_key(queue_plugin)}/api"
 
@@ -126,8 +125,7 @@ class Python:
         self.close()
 
     def close(self) -> None:
-        if self._owns_cluster:
-            self.cluster.close()
+        self.cluster.close()
 
     def _call(self, method: str, path: str, **kwargs: Any) -> Any:
         return self.cluster.request(method, self.api + path, **kwargs)
@@ -242,10 +240,9 @@ class Python:
 class AsyncPython:
     """Asynchronous client for Python environments and executions."""
 
-    def __init__(self, cluster: str | AsyncCluster = DEFAULT_URL, *, api_key: str | None = None,
-                 plugin: str = "python", queue_plugin: str = "queue") -> None:
-        self._owns_cluster = isinstance(cluster, str)
-        self.cluster = AsyncCluster(cluster, api_key=api_key) if isinstance(cluster, str) else cluster
+    def __init__(self, url: str, api_key: str, *, plugin: str = "python", queue_plugin: str = "queue",
+                 client: httpx.AsyncClient | None = None) -> None:
+        self.cluster = AsyncCluster(url, api_key, client=client)
         self.api = f"/plugins/{_key(plugin)}/api"
         self.queue_api = f"/plugins/{_key(queue_plugin)}/api"
 
@@ -256,8 +253,7 @@ class AsyncPython:
         await self.close()
 
     async def close(self) -> None:
-        if self._owns_cluster:
-            await self.cluster.close()
+        await self.cluster.close()
 
     async def _call(self, method: str, path: str, **kwargs: Any) -> Any:
         return await self.cluster.request(method, self.api + path, **kwargs)

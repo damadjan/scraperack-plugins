@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -27,7 +28,7 @@ def peak(executions):
 
 
 levels = [int(value) for value in sys.argv[1:]] or [1, 2, 4, 8, 16, 32]
-py = Python("http://192.168.2.15:7070")
+py = Python(os.environ["SCRAPERACK_URL"], os.environ["SCRAPERACK_API_KEY"])
 print("sent  peak  ok  total    req/s  p50     p95")
 for concurrency in levels:
     def execute(_):

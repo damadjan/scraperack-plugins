@@ -148,7 +148,7 @@ class ExecutorTest(unittest.TestCase):
         reply = executor.handle({"encoding": "python-source", "source": source, "params": [2, 3]})
         self.assertEqual(reply["result"]["value"], {"encoding": "json", "data": 5})
         self.assertIn("unknown payload encoding", executor.handle({"encoding": "nope"})["error"])
-        self.assertEqual(executor.handle({"encoding": "scraperack-preload", "modules": ["json"]})["result"]["value"],
+        self.assertEqual(executor.handle({"encoding": "scraperack-preload", "preload": ["json"]})["result"]["value"],
                          {"encoding": "json", "data": ["json"]})
 
     def test_extract_formats(self):

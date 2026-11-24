@@ -3,7 +3,8 @@ import os
 
 from scraperack_python import Python
 
-URL = os.environ.get("SCRAPERACK_URL", "http://127.0.0.1:7070")
+URL = os.environ["SCRAPERACK_URL"]
+API_KEY = os.environ["SCRAPERACK_API_KEY"]
 ENVIRONMENT = os.environ.get("SCRAPERACK_ENV", "examples")
 
 
@@ -11,7 +12,7 @@ def add(a, b):
     return a + b
 
 
-with Python(URL) as py:
+with Python(URL, API_KEY) as py:
     # Pickles add by value, runs add(2, 3) in a microVM, waits, returns 5.
     print(py.call(ENVIRONMENT, add, 2, 3))
 

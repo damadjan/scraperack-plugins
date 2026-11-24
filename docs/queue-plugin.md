@@ -37,7 +37,7 @@ def scrape(url):
     ...  # write the result to your own storage
 
 
-with Python("http://controller:7070") as py:
+with Python("http://controller:7070", "sr_...") as py:
     py.queue("upwork").configure(concurrency=20, rate_per_minute=300)
     call = py.bind("scrapers", scrape, "https://example.com")   # built, not started
     call.put("upwork")                                           # or call.run() to start it now

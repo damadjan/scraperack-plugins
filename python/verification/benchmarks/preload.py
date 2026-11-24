@@ -1,3 +1,4 @@
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,7 +11,7 @@ def get():
     return requests.__version__
 
 
-py = Python("http://192.168.2.15:7070")
+py = Python(os.environ["SCRAPERACK_URL"], os.environ["SCRAPERACK_API_KEY"])
 
 start = time.perf_counter()
 with ThreadPoolExecutor(max_workers=5) as pool:

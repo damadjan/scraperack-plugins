@@ -7,11 +7,12 @@ import os
 
 from scraperack_python import Python
 
-URL = os.environ.get("SCRAPERACK_URL", "http://127.0.0.1:7070")
+URL = os.environ["SCRAPERACK_URL"]
+API_KEY = os.environ["SCRAPERACK_API_KEY"]
 ENVIRONMENT = os.environ.get("SCRAPERACK_ENV", "examples")
 IMAGE_NAME = os.environ.get("IMAGE_NAME", "python-runtime")  # an imported image with python3
 
-with Python(URL) as py:
+with Python(URL, API_KEY) as py:
     if any(e["name"] == ENVIRONMENT for e in py.environments()):
         print(f"{ENVIRONMENT} already exists")
     else:

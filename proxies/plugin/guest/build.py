@@ -8,8 +8,7 @@ import subprocess
 import sys
 import tarfile
 
-# Built away from /tmp/environment, where older guest agents mount the first disk. A
-# virtualenv finds itself from its own pyvenv.cfg, so it runs from wherever it is mounted.
+# A virtualenv finds itself from its own pyvenv.cfg, so it runs from wherever it is mounted.
 VENV = "/tmp/proxies-build"
 
 

@@ -4,7 +4,8 @@ import os
 from scraperack import APIError
 from scraperack_python import Python, RemoteError
 
-URL = os.environ.get("SCRAPERACK_URL", "http://127.0.0.1:7070")
+URL = os.environ["SCRAPERACK_URL"]
+API_KEY = os.environ["SCRAPERACK_API_KEY"]
 ENVIRONMENT = os.environ.get("SCRAPERACK_ENV", "examples")
 
 
@@ -12,7 +13,7 @@ def divide(a, b):
     return a / b
 
 
-with Python(URL) as py:
+with Python(URL, API_KEY) as py:
     try:
         py.call(ENVIRONMENT, divide, 1, 0)
     except RemoteError as error:

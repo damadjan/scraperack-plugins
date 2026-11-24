@@ -26,7 +26,7 @@ def add(a, b):
     return a + b
 
 
-with Python("http://controller:7070") as py:
+with Python("http://controller:7070", "sr_...") as py:
     execution = py.run(
         "scrapers",                     # environment name or ID
         add,

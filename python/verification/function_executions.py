@@ -20,7 +20,7 @@ def python_version():
     return sys.version
 
 
-py = Python("http://192.168.2.15:7070")
+py = Python(os.environ["SCRAPERACK_URL"], os.environ["SCRAPERACK_API_KEY"])
 environment = os.getenv("SCRAPERACK_ENVIRONMENT", "python")
 jobs = [
     (python_version, ()),

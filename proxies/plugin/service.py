@@ -44,8 +44,7 @@ HERE = Path(__file__).resolve().parent
 
 VENV_MOUNT = "/tmp/environment"
 GUEST_MOUNT = "/tmp/scraperack/proxies"
-# cloudpickle: the Python executor baked into older images imports it with the package disk's Python.
-PACKAGES = ["curl-cffi==0.17.0", "aiohttp==3.14.5", "aiohttp-socks==0.12.0", "cloudpickle==3.1.2"]
+PACKAGES = ["curl-cffi==0.17.0", "aiohttp==3.14.5", "aiohttp-socks==0.12.0"]
 SCRAPER_POOL, TESTER_POOL, BUILDER_POOL = "proxies-scraper", "proxies-tester", "proxies-builder"
 FINISHED = {"succeeded", "failed", "timed_out"}
 RATE_RAMP_PER_MIN = 0.08
@@ -99,11 +98,7 @@ def core(method, path, body=None, file=None, timeout=120):
 
 
 def guest_source(module, entry):
-    """A `python-source` payload body: a guest module plus main(*params) calling its entry point.
-
-    Both this plugin's executor and the Python executor baked into older images (which run
-    their own executor whatever the pool says) run this format.
-    """
+    """A `python-source` payload body: a guest module plus main(*params) calling its entry point."""
     return (HERE / "guest" / f"{module}.py").read_text() + f"\n\ndef main(*params):\n    return {entry}(*params)\n"
 
 
@@ -159,8 +154,8 @@ def package_disk(image):
     """A disk with a virtualenv of PACKAGES, built once per image in a microVM of that image.
 
     A short-lived `proxies-builder` pool runs the executor with the image's own Python, which
-    pip-installs PACKAGES into /tmp/environment and returns it packed; the controller turns it
-    into an ext4 disk mounted at the same path in the scraper and tester pools.
+    pip-installs PACKAGES into a virtualenv and returns it packed; the controller turns it into
+    an ext4 disk mounted at VENV_MOUNT in the scraper and tester pools.
     """
     key = sha256(json.dumps([image["sha256"], PACKAGES]).encode()).hexdigest()
     cached = json.loads(store.get_value("status_packages", "{}"))

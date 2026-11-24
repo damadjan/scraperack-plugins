@@ -74,8 +74,7 @@ def preload(modules):
 def execute(payload):
     encoding = payload["encoding"]
     if encoding == "scraperack-preload":
-        # Older guest agents name the list "modules".
-        return preload(payload.get("preload", payload.get("modules", [])))
+        return preload(payload["preload"])
     if encoding == "python-function":
         key = payload.get("cache_key", payload["hash"])
         if key not in FUNCTIONS:

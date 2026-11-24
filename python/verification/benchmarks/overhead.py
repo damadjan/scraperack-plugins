@@ -1,10 +1,11 @@
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from scraperack_python import Python
 
 
-py = Python("http://192.168.2.15:7070")
+py = Python(os.environ["SCRAPERACK_URL"], os.environ["SCRAPERACK_API_KEY"])
 
 
 def identity(value):
