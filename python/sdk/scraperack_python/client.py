@@ -112,10 +112,10 @@ def _key(value: str) -> str:
 class Python:
     """Synchronous client for Python environments and executions."""
 
-    def __init__(self, cluster: str | Cluster = DEFAULT_URL, *, plugin: str = "python",
-                 queue_plugin: str = "queue") -> None:
+    def __init__(self, cluster: str | Cluster = DEFAULT_URL, *, api_key: str | None = None,
+                 plugin: str = "python", queue_plugin: str = "queue") -> None:
         self._owns_cluster = isinstance(cluster, str)
-        self.cluster = Cluster(cluster) if isinstance(cluster, str) else cluster
+        self.cluster = Cluster(cluster, api_key=api_key) if isinstance(cluster, str) else cluster
         self.api = f"/plugins/{_key(plugin)}/api"
         self.queue_api = f"/plugins/{_key(queue_plugin)}/api"
 
@@ -242,10 +242,10 @@ class Python:
 class AsyncPython:
     """Asynchronous client for Python environments and executions."""
 
-    def __init__(self, cluster: str | AsyncCluster = DEFAULT_URL, *,
+    def __init__(self, cluster: str | AsyncCluster = DEFAULT_URL, *, api_key: str | None = None,
                  plugin: str = "python", queue_plugin: str = "queue") -> None:
         self._owns_cluster = isinstance(cluster, str)
-        self.cluster = AsyncCluster(cluster) if isinstance(cluster, str) else cluster
+        self.cluster = AsyncCluster(cluster, api_key=api_key) if isinstance(cluster, str) else cluster
         self.api = f"/plugins/{_key(plugin)}/api"
         self.queue_api = f"/plugins/{_key(queue_plugin)}/api"
 

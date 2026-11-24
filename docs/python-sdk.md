@@ -26,7 +26,7 @@ def fetch(url):
     return httpx.get(url, headers={"Authorization": secret("TOKEN")}).status_code
 
 
-with Python("http://controller:7070") as py:
+with Python("http://controller:7070", api_key="sr_...") as py:
     # Run and wait in one step; raises RemoteError with the traceback on failure.
     print(py.call("scrapers", fetch, "https://example.com",
                   variables={"MODE": "fast"}, secrets={"TOKEN": "..."}))
@@ -39,6 +39,9 @@ with Python("http://controller:7070") as py:
         print("failed:", error)
     print(py.logs(execution["id"])["stdout"])
 ```
+
+`api_key` is a Scraperack API key that opens the python and queue plugins (and `core`, for
+`.cluster`); without it the client reads `SCRAPERACK_API_KEY`.
 
 `run` and `call` take:
 

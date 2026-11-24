@@ -20,7 +20,7 @@ programs through an API.
 
 3. On **Sources**, paste the proxy lists you want scraped, one URL or domain per line. None
    ship with the plugin.
-4. On **API keys**, create a key for your programs.
+4. In Scraperack, create an API key under **API keys** with access to the Proxies plugin.
 
 On first start the plugin builds a package disk (curl-cffi, aiohttp, aiohttp-socks) for the
 image chosen in **Settings** (default `python-generic-v2`; any image with `/usr/bin/python3`
@@ -38,14 +38,14 @@ virtualenv and the controller turns it into a disk. Then it creates two pools,
   disabled. **Disable failing/empty** turns off every source whose last scrape failed or
   found nothing.
 - **Proxies:** working proxies with filters, exported as `ip:port` or `protocol://ip:port`.
-- **API keys:** create, rotate (with a grace period for the old secret), disable and delete
-  keys, and turn the key requirement off.
+- **API:** how programs call it.
 - **Settings:** schedule, scraper and tester sizes, source scoring, rate limiting, retention,
   judge URLs, and the pools' image and machine sizes.
 
 ## API
 
-Programs use the API with `Authorization: Bearer <key>` (unless **Require a key** is off):
+Programs use the API with `Authorization: Bearer <key>`, a Scraperack API key that opens the
+proxies plugin:
 
 ```sh
 curl -H "Authorization: Bearer $KEY" \
@@ -81,8 +81,10 @@ Reports take `proxy` as `scheme://host:port` or `host:port` and one `reason`:
 
 An unknown proxy answers 404.
 
-The page's own endpoints (`overview`, `sources`, `browse`, `settings`, `keys`, `run`) are
-under the same `/plugins/proxies/api/` and need no key, like the rest of the controller's API.
+The page's own endpoints (`overview`, `sources`, `browse`, `settings`, `run`) are under the
+same `/plugins/proxies/api/` and need the same key on port 7070. The page itself reaches them
+through the Scraperack GUI without one. Other plugins call the API through their core socket,
+which needs no key.
 
 ## How it works
 

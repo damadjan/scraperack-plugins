@@ -572,15 +572,9 @@ PROGRAM_ROUTES = {("GET", "proxies"), ("GET", "proxies/random"), ("GET", "stats"
 
 
 def public_route(method, parts, query, headers, body=None):
-    """The API for programs, other plugins included; needs a key while api_auth_required is on."""
+    """The API for programs, other plugins included; Scraperack checks their API key."""
     if (method, "/".join(parts)) not in PROGRAM_ROUTES:
         return None
-    if store.get_settings()["api_auth_required"]:
-        auth = headers.get("Authorization") or ""
-        key = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        problem = store.check_key(key)
-        if problem:
-            raise ApiError(401, problem)
     if parts == ["reports"]:
         reason = (body or {}).get("reason")
         proxy_id = store.report_proxy((body or {}).get("proxy"), reason)
@@ -650,24 +644,6 @@ def admin_route(method, parts, body, query):
             return 200, {"saved": store.save_settings(body)}
     if parts == ["images"] and method == "GET":
         return 200, [{"id": i["id"], "name": i["name"], "ready": i.get("ready")} for i in core("GET", "/v1/images")]
-    if parts == ["keys"]:
-        if method == "GET":
-            return 200, {"keys": store.list_keys(), "auth_required": store.get_settings()["api_auth_required"]}
-        if method == "POST":
-            return 201, store.create_key(body.get("name"), int(body.get("days") or 0))
-    if len(parts) >= 2 and parts[0] == "keys":
-        try:
-            key_id = int(parts[1])
-            if len(parts) == 2 and method == "DELETE":
-                store.delete_key(key_id)
-                return 204, None
-            if len(parts) == 2 and method == "PUT":
-                store.set_key_enabled(key_id, bool(body.get("enabled")))
-                return 200, {"ok": True}
-            if len(parts) == 3 and parts[2] == "rotate" and method == "POST":
-                return 200, store.rotate_key(key_id, int(body.get("grace_minutes") or 0))
-        except KeyError as error:
-            raise ApiError(404, error.args[0]) from None
     return None
 
 

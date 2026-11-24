@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- Proxies: the plugin's own page. Dashboard, sources, working proxies, API keys and
+<!-- Proxies: the plugin's own page. Dashboard, sources, working proxies, API usage and
      settings. Plain HTML, CSS and JavaScript; talks to the plugin API next to it. -->
 <html lang="en">
 <head>
@@ -167,7 +167,7 @@
   <a class="brand" href="#"><span class="brand-mark"><svg><use href="#i-globe"/></svg></span>Proxies</a>
   <nav class="nav">
     <a href="#" data-view="dashboard">Dashboard</a><a href="#/sources" data-view="sources">Sources</a>
-    <a href="#/proxies" data-view="proxies">Proxies</a><a href="#/keys" data-view="keys">API keys</a>
+    <a href="#/proxies" data-view="proxies">Proxies</a><a href="#/api" data-view="api">API</a>
     <a href="#/settings" data-view="settings">Settings</a>
   </nav>
   <span class="spacer"></span>
@@ -255,20 +255,16 @@
   <div class="table-wrap"><table id="proxies-table"></table></div>
 </main>
 
-<!-- API keys -->
-<main class="page" id="view-keys" hidden>
+<!-- API -->
+<main class="page" id="view-api" hidden>
   <div class="hero">
-    <div><h1>API keys</h1><p>Programs read proxies from the API with a key. Only a hash is stored, so a key is shown once, when it is created or rotated.</p></div>
-    <span class="spacer"></span>
-    <button class="btn primary" id="new-key">New key</button>
+    <div><h1>API</h1><p>Programs read proxies from the Scraperack API with a key. Create one in Scraperack under
+      <b>API keys</b> and give it access to the Proxies plugin.</p></div>
   </div>
   <div class="panel">
-    <h2>Use the API
-      <label class="chip" style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:500">
-        <input type="checkbox" id="auth-required"> Require a key</label></h2>
+    <h2>Use the API</h2>
     <pre class="code" id="usage"></pre>
   </div>
-  <div class="table-wrap"><table id="keys-table"></table></div>
 </main>
 
 <!-- Settings -->
@@ -509,82 +505,21 @@ document.querySelectorAll("[data-export]").forEach(button => button.onclick = ()
   URL.revokeObjectURL(link.href);
 }));
 
-// --- API keys ------------------------------------------------------------------------
-let keys = [];
-const keySort = {key: "id", desc: false};
-const KEY_COLUMNS = [
-  {key: "name", label: "Name"},
-  {key: "prefix", label: "Key", cls: "mono", render: r => escape(r.prefix + "…")},
-  {key: "status", label: "Status", render: r => pill(r.status)},
-  {key: "created_at", label: "Created", render: r => escape(local(r.created_at))},
-  {key: "expires_at", label: "Expires", render: r => escape(r.expires_at ? local(r.expires_at) : "never")},
-  {key: "last_used_at", label: "Last used", render: r => escape(ago(r.last_used_at) || "never")},
-  {key: "rotated_at", label: "Rotated", render: r => escape(ago(r.rotated_at)) +
-     (r.old_key_valid_until ? ` <span class="muted">(old key until ${escape(local(r.old_key_valid_until))})</span>` : "")},
-  {key: "actions", label: "", render: r => `<div class="actions">
-     <button class="btn small" data-key-action="rotate" data-id="${r.id}">Rotate</button>
-     <button class="btn small" data-key-action="${r.enabled ? "disable" : "enable"}" data-id="${r.id}">${r.enabled ? "Disable" : "Enable"}</button>
-     <button class="btn small danger" data-key-action="delete" data-id="${r.id}">Delete</button></div>`},
-];
-function drawKeys() {
-  table($("keys-table"), KEY_COLUMNS, keys, keySort, {redraw: drawKeys, empty: "No keys yet"});
-  $("keys-table").querySelectorAll("[data-key-action]").forEach(button => button.onclick = () => keyAction(button.dataset.keyAction, Number(button.dataset.id)));
-}
-async function loadKeys() {
-  const data = await api("GET", "keys");
-  keys = data.keys;
-  $("auth-required").checked = data.auth_required;
-  $("usage").textContent = `curl ${data.auth_required ? '-H "Authorization: Bearer <key>" ' : ""}"${API_BASE}proxies?protocol=socks5&limit=20&format=txt"\n\n` +
-    `GET ${API_BASE}proxies          filters: protocol, anonymity, country, max_latency, max_https_latency, checked_within,\n` +
-    `                                 trusted=1, connect=1, limit, sort=latency|checked|uptime|score, format=json|txt, scheme\n` +
-    `GET ${API_BASE}proxies/random   one working proxy, same filters\n` +
-    `GET ${API_BASE}stats            counts\n` +
-    `POST ${API_BASE}reports         {"proxy": "socks5://1.2.3.4:1080", "reason": "worked|dead|intercepts"}`;
-  drawKeys();
-}
-$("auth-required").onchange = event => act(() => api("PUT", "settings", {api_auth_required: event.target.checked}),
-  event.target.checked ? "The API now needs a key" : "The API is now open to anyone who can reach the controller").then(loadKeys);
-function dialog(html) { $("dialog").innerHTML = html; $("dialog").showModal(); return $("dialog"); }
-function showKey(title, key) {
-  dialog(`<div class="dlg-head"><h2>${escape(title)}</h2><p>Copy it now. Only a hash is stored, so it cannot be shown again.</p></div>
-    <div class="dlg-body"><pre class="code" id="new-key-value">${escape(key)}</pre>
-    <div class="muted">Send it as <span class="mono">Authorization: Bearer &lt;key&gt;</span></div></div>
-    <div class="dlg-foot"><span class="spacer"></span><button class="btn" id="copy-key">Copy</button><button class="btn primary" id="done">Done</button></div>`);
-  $("copy-key").onclick = () => navigator.clipboard.writeText(key).then(() => toast("Copied"), () => toast("Select the key and copy it", true));
-  $("done").onclick = () => $("dialog").close();
-}
-$("new-key").onclick = () => {
-  dialog(`<div class="dlg-head"><h2>New API key</h2></div><div class="dlg-body">
-    <label class="field">Name<input id="key-name" placeholder="scraper on box 3"></label>
-    <label class="field">Expires<select id="key-days"><option value="0">Never</option><option value="30">In 30 days</option>
-      <option value="90">In 90 days</option><option value="365">In 1 year</option></select></label></div>
-    <div class="dlg-foot"><span class="spacer"></span><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="create">Create</button></div>`);
-  $("cancel").onclick = () => $("dialog").close();
-  $("create").onclick = () => act(async () => {
-    const out = await api("POST", "keys", {name: $("key-name").value, days: Number($("key-days").value)});
-    await loadKeys();
-    showKey("Your new API key", out.key);
-  });
-};
-function keyAction(action, id) {
-  const key = keys.find(k => k.id === id);
-  if (action === "rotate") {
-    dialog(`<div class="dlg-head"><h2>Rotate ${escape(key.name)}</h2><p>A new secret replaces the current one. Name, expiry and status stay the same.</p></div>
-      <div class="dlg-body"><label class="field">The old key stops working<select id="grace"><option value="0">Immediately</option>
-        <option value="60">After 1 hour</option><option value="1440">After 24 hours</option><option value="10080">After 7 days</option></select></label></div>
-      <div class="dlg-foot"><span class="spacer"></span><button class="btn" id="cancel">Cancel</button><button class="btn primary" id="rotate">Rotate</button></div>`);
-    $("cancel").onclick = () => $("dialog").close();
-    $("rotate").onclick = () => act(async () => {
-      const out = await api("POST", `keys/${id}/rotate`, {grace_minutes: Number($("grace").value)});
-      await loadKeys();
-      showKey(`New secret for ${key.name}`, out.key);
-    });
-  } else if (action === "delete") {
-    if (confirm(`Delete key ${key.name}? Programs using it stop working.`))
-      act(async () => { await api("DELETE", `keys/${id}`); await loadKeys(); }, "Key deleted");
-  } else {
-    act(async () => { await api("PUT", `keys/${id}`, {enabled: action === "enable"}); await loadKeys(); }, `Key ${action}d`);
-  }
+// --- API ----------------------------------------------------------------------------
+const PUBLIC_BASE = "http://<controller>:7070/plugins/proxies/api/";
+async function loadApi() {
+  $("usage").textContent = `curl -H "Authorization: Bearer <key>" "${PUBLIC_BASE}proxies?protocol=socks5&limit=20&format=txt"
+
+` +
+    `GET  proxies          filters: protocol, anonymity, country, max_latency, max_https_latency, checked_within,
+` +
+    `                      trusted=1, connect=1, limit, sort=latency|checked|uptime|score, format=json|txt, scheme
+` +
+    `GET  proxies/random   one working proxy, same filters
+` +
+    `GET  stats            counts
+` +
+    `POST reports          {"proxy": "socks5://1.2.3.4:1080", "reason": "worked|dead|intercepts"}`;
 }
 
 // --- Settings ------------------------------------------------------------------------
@@ -676,7 +611,7 @@ $("save-settings").onclick = () => act(async () => {
 }, out => out.saved ? `Saved ${out.saved} settings` : "Nothing changed");
 
 // --- Views ---------------------------------------------------------------------------
-const VIEWS = {dashboard: loadDashboard, sources: loadSources, proxies: loadProxies, keys: loadKeys, settings: loadSettings};
+const VIEWS = {dashboard: loadDashboard, sources: loadSources, proxies: loadProxies, api: loadApi, settings: loadSettings};
 let view = "dashboard";
 function show() {
   const name = location.hash.replace(/^#\/?/, "") || "dashboard";

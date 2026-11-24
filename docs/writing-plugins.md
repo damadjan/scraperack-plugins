@@ -40,6 +40,11 @@ The plugin must answer `GET /health` with a 2xx status. It may serve:
 Paths, methods, query strings, and bodies are proxied unchanged. Output goes to the
 plugin's log on its card.
 
+Scraperack checks API keys before a request reaches the plugin: on port 7070 a key needs the
+plugin's scope (or `*`). The plugin gets the request without `Authorization` and with
+`X-Scraperack-Key: <key name>`; requests from the GUI and from other plugins (through their
+core socket) carry no key. A plugin never manages keys itself.
+
 When the plugin starts it should read its state from the core and make its pools match,
 so it recovers from crashes, restarts, and missed changes.
 
