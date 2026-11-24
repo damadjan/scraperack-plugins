@@ -376,10 +376,12 @@ def report_capacity():
     running = store.running()
     try:
         core("PUT", "/v1/capacity", {
+            "output": {"label": "Jobs running", "ready": len(running)},
             "dependencies": sorted({job["runner"] for job in running})[:12],
-            "resources": [{"label": "Running jobs", "used": len(running),
+            "resources": [{"label": "Concurrency", "used": len(running),
                            "total": sum(queue["concurrency"] for queue in queues
-                                        if not queue["paused"]) or None}],
+                                        if not queue["paused"]) or None, "unit": "jobs",
+                           "hint": "Raise a queue's concurrency"}],
             "queued": sum(count["queued"] for count in counts.values()),
         })
     except (OSError, ApiError):

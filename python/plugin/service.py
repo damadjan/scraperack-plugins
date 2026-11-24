@@ -465,6 +465,26 @@ def reconcile():
             traceback.print_exc()
 
 
+def capacity_report():
+    """Executions running now; the core adds each environment's pool as a stage by itself."""
+    pools = [pool for pool in core("GET", "/v1/capacity")["pools"] if pool["owner"] == PLUGIN]
+    return {
+        "output": {"label": "Executions running", "ready": sum(pool["active"] for pool in pools)},
+        "queued": sum(pool["queued"] for pool in pools),
+    }
+
+
+def report_capacity_forever():
+    """Tell the core what this plugin delivers and what limits it, for the homepage funnels.
+    Reports expire after 30 seconds, so a stuck plugin drops off on its own."""
+    while True:
+        try:
+            core("PUT", "/v1/capacity", capacity_report())
+        except Exception:  # noqa: BLE001 - best effort; the next round tries again
+            pass
+        time.sleep(10)
+
+
 # --- Executions ---------------------------------------------------------------------
 #
 # An execution is a core task on one of this plugin's pools. The core keeps the
@@ -906,6 +926,7 @@ def main():
     server.daemon_threads = True
     threading.Thread(target=reconcile, daemon=True).start()
     threading.Thread(target=prune_run_keys_forever, daemon=True).start()
+    threading.Thread(target=report_capacity_forever, daemon=True).start()
     print(f"{PLUGIN} plugin listening on {PLUGIN_SOCKET}", file=sys.stderr, flush=True)
     server.serve_forever()
 

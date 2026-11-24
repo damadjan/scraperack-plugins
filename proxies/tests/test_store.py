@@ -113,6 +113,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(ips(connect=True), ["7.7.7.2", "7.7.7.1"])
         self.assertEqual(ips(trusted=True, max_https_latency=500), ["7.7.7.2"])
         self.assertEqual(store.stats()["intercepting"], 1)
+        self.assertEqual(store.capacity_counts(), {"alive": 4, "new": 0, "trusted": 2})
         # A later clean check never clears a forged certificate.
         forged = store.query_proxies(limit=10)
         row = next(p for p in forged if p["ip"] == "7.7.7.3")
