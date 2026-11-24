@@ -1,5 +1,5 @@
 name = "python"
-version = "0.5.1"
+version = "0.5.2"
 description = "Warm Python environments: packages built once, modules imported before the snapshot, functions called from the scraperack-python SDK and kept as executions with their output; runs for the queue plugin."
 run = ["python3", "service.py"]
 gui = true

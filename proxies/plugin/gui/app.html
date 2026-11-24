@@ -294,7 +294,11 @@ function ago(ts) {
   return s < 60 ? `${Math.floor(s)}s ago` : s < 3600 ? `${Math.floor(s / 60)}m ago`
     : s < 86400 ? `${Math.floor(s / 3600)}h ago` : `${Math.floor(s / 86400)}d ago`;
 }
-const local = ts => ts ? new Date(parseTs(ts)).toLocaleString() : "";
+// Times use the cluster's display timezone, set in the core GUI's Settings.
+let timeZone;
+const zoneReady = fetch("/v1/settings/timezone").then(r => r.json())
+  .then(setting => { timeZone = setting.timezone; }).catch(() => {});
+const local = ts => ts ? new Date(parseTs(ts)).toLocaleString(undefined, {timeZone}) : "";
 const pill = (state, text) => `<span class="pill ${escape(state)}"><span class="dot"></span>${escape(text ?? state)}</span>`;
 const API_BASE = new URL(location.pathname.replace(/\/gui\/app\/?$/, "/api/"), location.origin).href;
 
@@ -621,7 +625,7 @@ function show() {
   act(VIEWS[view]);
 }
 window.addEventListener("hashchange", show);
-show();
+zoneReady.then(show);
 setInterval(() => {
   if (document.hidden || $("dialog").open) return;
   if (view === "dashboard") act(loadDashboard);

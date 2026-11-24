@@ -326,6 +326,11 @@ def get_workspace(key):
     return workspace_view(workspace, templates, volumes_by_name(), nodes_by_id())
 
 
+def display_timezone():
+    """The cluster's display timezone, the default for a workspace's desktop clock."""
+    return core("GET", "/v1/settings/timezone")["timezone"]
+
+
 def create_workspace(request):
     name = check_name(request.get("name"), "workspace")
     with lock:
@@ -349,7 +354,7 @@ def create_workspace(request):
     workspace = {
         "id": workspace_id, "name": name, "template": template["id"],
         "volume": f"workspace-{workspace_id}", "disk_gib": disk_gib,
-        "timezone": str(request.get("timezone") or "UTC"), "status": "stopped",
+        "timezone": str(request.get("timezone") or display_timezone()), "status": "stopped",
         "task": None, "created_at_ms": now_ms(),
     }
     core("POST", "/v1/volumes", {"name": workspace["volume"], "size_mib": disk_gib * 1024})
@@ -372,7 +377,7 @@ def edit_workspace(key, request):
                    for w in load(WORKSPACES).values()):
                 raise ApiError(409, "workspace name already exists")
     if "timezone" in request:
-        changes["timezone"] = str(request["timezone"] or "UTC")
+        changes["timezone"] = str(request["timezone"] or display_timezone())
     if "template" in request:
         with lock:
             template = find(load(TEMPLATES), str(request["template"]), "template")["id"]

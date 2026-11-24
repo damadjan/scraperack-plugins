@@ -123,7 +123,11 @@ async function api(method, path, body) {
 
 const esc = value => String(value ?? "").replace(/[&<>"']/g,
   char => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[char]);
-const when = ms => ms ? new Date(ms).toLocaleString() : "";
+// Times use the cluster's display timezone, set in the core GUI's Settings.
+let timeZone;
+const zoneReady = fetch("/v1/settings/timezone").then(r => r.json())
+  .then(setting => { timeZone = setting.timezone; }).catch(() => {});
+const when = ms => ms ? new Date(ms).toLocaleString(undefined, {timeZone}) : "";
 const count = value => Number(value || 0).toLocaleString();
 const notice = (text, error) => {
   const element = document.getElementById("notice");
@@ -294,7 +298,7 @@ async function refresh() {
   await loadJobs();
 }
 
-refresh();
+zoneReady.then(refresh);
 setInterval(() => { if (!document.querySelector("dialog[open]")) refresh(); }, 3000);
 </script>
 </body>
