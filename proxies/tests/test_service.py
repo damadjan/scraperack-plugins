@@ -107,20 +107,16 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(store.stats()["proxies"]["new"], 1)
         self.assertGreater(store.get_settings()["test_rate_ceiling"], 0)
 
-    def test_public_api_needs_a_key(self):
-        with self.assertRaises(service.ApiError) as caught:
-            self.call("GET", "/api/proxies")
-        self.assertEqual(caught.exception.status, 401)
-        key = self.call("POST", "/api/keys", {"name": "bot"})[1]["key"]
-        status, body = self.call("GET", "/api/proxies", headers={"Authorization": f"Bearer {key}"})
+    def test_public_api_leaves_keys_to_scraperack(self):
+        status, body = self.call("GET", "/api/proxies")
         self.assertEqual((status, body), (200, {"count": 0, "proxies": []}))
-        store.save_settings({"api_auth_required": False})
         self.assertEqual(self.call("GET", "/api/proxies", query="format=txt")[1], "")
+        with self.assertRaises(service.ApiError):   # the plugin no longer manages keys
+            self.call("GET", "/api/keys")
         with self.assertRaises(service.ApiError):
             self.call("GET", "/api/proxies/random")
 
     def test_reports_route(self):
-        store.save_settings({"api_auth_required": False})
         with self.assertRaises(service.ApiError) as caught:
             self.call("POST", "/api/reports", {"proxy": "socks5://1.2.3.4:1080", "reason": "dead"})
         self.assertEqual(caught.exception.status, 404)
@@ -128,10 +124,6 @@ class ServiceTest(unittest.TestCase):
             self.call("POST", "/api/reports", {"proxy": "1.2.3.4:1080", "reason": "maybe"})
         with self.assertRaises(service.ApiError):   # reports are POST only
             self.call("GET", "/api/reports")
-        store.save_settings({"api_auth_required": True})
-        with self.assertRaises(service.ApiError) as caught:
-            self.call("POST", "/api/reports", {"proxy": "1.2.3.4:1080", "reason": "dead"})
-        self.assertEqual(caught.exception.status, 401)
 
     def test_admin_routes(self):
         self.assertEqual(self.call("POST", "/gui/api/sources", {"urls": "a.example\nb.example"})[1], {"added": 2})

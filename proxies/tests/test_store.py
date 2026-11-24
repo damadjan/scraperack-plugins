@@ -210,24 +210,6 @@ class StoreTest(unittest.TestCase):
         self.assertEqual((out["listings"], out["dead"]), (2, 2))
         self.assertEqual(store.scalar("SELECT COUNT(*) FROM proxies"), 0)
 
-    def test_api_keys(self):
-        created = store.create_key("bot", 0)
-        self.assertIsNone(store.check_key(created["key"]))
-        self.assertEqual(store.check_key("psx_wrong"), "invalid API key")
-        rotated = store.rotate_key(created["id"], 60)
-        self.assertIsNone(store.check_key(created["key"]))   # old key still in its grace period
-        self.assertIsNone(store.check_key(rotated["key"]))
-        with store.write() as conn:   # the grace period ends
-            conn.execute("UPDATE api_keys SET previous_expires_at = '2000-01-01 00:00:00'")
-        self.assertEqual(store.check_key(created["key"]), "this API key was rotated; use the new key")
-        store.rotate_key(created["id"], 0)
-        self.assertEqual(store.check_key(rotated["key"]), "invalid API key")
-        store.set_key_enabled(created["id"], False)
-        self.assertEqual(store.list_keys()[0]["status"], "disabled")
-        store.delete_key(created["id"])
-        with self.assertRaises(KeyError):
-            store.delete_key(created["id"])
-
 
 if __name__ == "__main__":
     unittest.main()

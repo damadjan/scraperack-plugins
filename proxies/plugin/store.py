@@ -1,4 +1,4 @@
-"""SQLite storage: sources, proxies, who lists what, settings, runs, events and API keys.
+"""SQLite storage: sources, proxies, who lists what, settings, runs and events.
 
 Proxy lifecycle: new -> alive <-> (re-checked) ... -> dead. A dead proxy that never worked is
 not tested again while sources keep listing it: its row stays so a re-scrape cannot bring it
@@ -13,7 +13,6 @@ Timestamps are UTC text ('YYYY-MM-DD HH:MM:SS'), so they sort and compare as str
 """
 import hashlib
 import json
-import secrets
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -97,20 +96,8 @@ CREATE TABLE IF NOT EXISTS events (
     level TEXT NOT NULL,
     message TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS api_keys (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    prefix TEXT NOT NULL,                   -- first characters, shown in the GUI
-    key_hash TEXT NOT NULL UNIQUE,          -- sha256 of the key; the key itself is never stored
-    enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    expires_at TEXT,                        -- NULL = never
-    rotated_at TEXT,
-    previous_hash TEXT,                     -- old key, still valid until previous_expires_at
-    previous_expires_at TEXT,
-    last_used_at TEXT
-);
-CREATE INDEX IF NOT EXISTS ix_api_keys_previous_hash ON api_keys (previous_hash);
+-- API keys moved to Scraperack itself in 0.2.0.
+DROP TABLE IF EXISTS api_keys;
 """
 
 DEFAULT_JUDGES = 'http://httpbin.org/get\nhttp://azenv.net/\nhttp://proxyjudge.us/azenv.php'
@@ -129,7 +116,6 @@ WORKED_RECENT_HOURS = 6   # sort=score puts proxies reported working this recent
 
 # key: (default, type, description)
 DEFAULTS = {
-    'api_auth_required': ('1', bool, 'API requests need an Authorization: Bearer key'),
     'scraping_enabled': ('1', bool, 'Run the scraper on its schedule'),
     'testing_enabled': ('1', bool, 'Run the tester continuously'),
     'scrape_interval_min': ('30', int, 'Minutes between full scrapes of all sources'),
@@ -173,7 +159,6 @@ DEFAULTS = {
 }
 STATUS_KEYS = ('status_test_rate', 'status_packages')   # kept by the service, not shown as settings
 PRIOR_YIELD = 0.05   # assumed yield for a source still in its trial
-KEY_PREFIX = 'psx_'
 PROTOCOLS = {'http', 'https', 'socks4', 'socks5'}
 ANONYMITY = {'transparent', 'anonymous', 'elite'}
 
@@ -811,85 +796,3 @@ def last_runs():
 
 def recent_events(limit=150):
     return rows('SELECT id, ts, level, message FROM events ORDER BY id DESC LIMIT ?', (limit,))
-
-
-# ---------------------------------------------------------------- API keys
-# Only a sha256 of each key is stored; the full key is shown once, when created or rotated.
-
-def new_secret():
-    key = KEY_PREFIX + secrets.token_urlsafe(32)
-    return key, key[:len(KEY_PREFIX) + 6], hashlib.sha256(key.encode()).hexdigest()
-
-
-def list_keys():
-    ts = now()
-    out = rows('SELECT id, name, prefix, enabled, created_at, expires_at, rotated_at, previous_hash, '
-               'previous_expires_at, last_used_at FROM api_keys ORDER BY id')
-    for row in out:
-        row['status'] = ('disabled' if not row['enabled']
-                         else 'expired' if row['expires_at'] and row['expires_at'] <= ts else 'active')
-        grace = row.pop('previous_expires_at')
-        row['old_key_valid_until'] = grace if row.pop('previous_hash') and grace and grace > ts else None
-        row['enabled'] = bool(row['enabled'])
-    return out
-
-
-def create_key(name, days):
-    name = str(name or '').strip()[:100]
-    if not name:
-        raise ValueError('name is required')
-    key, prefix, digest = new_secret()
-    expires = ago_ts(days=-int(days)) if days else None
-    with write() as conn:
-        key_id = conn.execute('INSERT INTO api_keys (name, prefix, key_hash, created_at, expires_at) '
-                              'VALUES (?, ?, ?, ?, ?)', (name, prefix, digest, now(), expires)).lastrowid
-    return {'id': key_id, 'key': key}
-
-
-def rotate_key(key_id, grace_minutes):
-    """New secret for the same key; the old one keeps working for grace_minutes (0 = stops at once)."""
-    key, prefix, digest = new_secret()
-    grace = int(grace_minutes or 0)
-    with write() as conn:
-        changed = conn.execute(
-            'UPDATE api_keys SET previous_hash = CASE WHEN ? > 0 THEN key_hash ELSE NULL END, '
-            'previous_expires_at = ?, prefix = ?, key_hash = ?, rotated_at = ? WHERE id = ?',
-            (grace, ago_ts(minutes=-grace) if grace else None, prefix, digest, now(), key_id)).rowcount
-    if not changed:
-        raise KeyError('API key not found')
-    return {'id': key_id, 'key': key}
-
-
-def set_key_enabled(key_id, enabled):
-    with write() as conn:
-        if not conn.execute('UPDATE api_keys SET enabled = ? WHERE id = ?', (1 if enabled else 0, key_id)).rowcount:
-            raise KeyError('API key not found')
-
-
-def delete_key(key_id):
-    with write() as conn:
-        if not conn.execute('DELETE FROM api_keys WHERE id = ?', (key_id,)).rowcount:
-            raise KeyError('API key not found')
-
-
-def check_key(key):
-    """None if the key may be used, else the reason it may not."""
-    if not key:
-        return 'missing API key: send Authorization: Bearer <key>'
-    digest = hashlib.sha256(key.encode()).hexdigest()
-    found = rows('SELECT id, enabled, expires_at, key_hash, previous_expires_at, last_used_at FROM api_keys '
-                 'WHERE key_hash = ? OR previous_hash = ?', (digest, digest))
-    if not found:
-        return 'invalid API key'
-    row, ts = found[0], now()
-    if row['key_hash'] != digest and not (row['previous_expires_at'] and row['previous_expires_at'] > ts):
-        return 'this API key was rotated; use the new key'
-    if not row['enabled']:
-        return 'API key is disabled'
-    if row['expires_at'] and row['expires_at'] <= ts:
-        return 'API key has expired'
-    # last_used_at is written at most once a minute per key, so busy clients do not cost writes.
-    if row['last_used_at'] is None or row['last_used_at'] <= ago_ts(minutes=1):
-        with write() as conn:
-            conn.execute('UPDATE api_keys SET last_used_at = ? WHERE id = ?', (ts, row['id']))
-    return None
