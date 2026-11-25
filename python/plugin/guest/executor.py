@@ -7,7 +7,8 @@ then is already loaded in every microVM restored from the snapshot. Speaks
 length-prefixed JSON on the executor socket.
 
 Payloads: python-function (a cloudpickled function, from the SDK) and
-python-source (source defining main(), used by the plugin's package builds).
+python-source (Python source: main(*params, **kwargs) when it defines main, otherwise
+the script's `result` variable; used by package builds and by callers without an SDK).
 """
 import base64
 import hashlib
@@ -33,6 +34,8 @@ import scraperack_runtime  # noqa: E402
 
 SOCKET = Path("/tmp/scraperack-executor.sock")
 FUNCTIONS = {}
+SOURCES = {}            # sha256 of python-source -> compiled code, while the microVM is reused
+MAX_SOURCES = 256
 WORKING_DIRS = Path("/tmp/scraperack-working-dirs")
 STDOUT = tempfile.TemporaryFile(mode="w+")
 STDERR = tempfile.TemporaryFile(mode="w+")
@@ -85,13 +88,28 @@ def execute(payload):
         params = cloudpickle.loads(base64.b64decode(payload["params"]))
         return FUNCTIONS[key](*params)
     if encoding == "python-source":
-        namespace = {}
-        exec(payload["source"], namespace)
-        function = namespace.get("main")
-        if not callable(function):
-            raise ValueError("python-source must define main(...)")
-        return function(*payload.get("params", []))
+        return run_source(payload["source"], payload.get("params") or [],
+                          payload.get("kwargs") or {})
     raise ValueError(f"unknown payload encoding: {encoding}")
+
+
+def run_source(source, params, kwargs):
+    """Run source code: call its main() if it defines one, else return its `result`."""
+    key = hashlib.sha256(source.encode()).hexdigest()
+    code = SOURCES.get(key)
+    if code is None:
+        code = compile(source, "<source>", "exec")
+        if len(SOURCES) >= MAX_SOURCES:
+            SOURCES.pop(next(iter(SOURCES)))
+        SOURCES[key] = code
+    namespace = {"__name__": "__scraperack__"}
+    exec(code, namespace)
+    function = namespace.get("main")
+    if callable(function):
+        return function(*params, **kwargs)
+    if params or kwargs:
+        raise ValueError("params and kwargs need the source to define main(...)")
+    return namespace.get("result")
 
 
 def prepare_working_dir(spec):
@@ -197,12 +215,6 @@ def handle(payload):
     }
 
 
-SOCKET.unlink(missing_ok=True)
-server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-server.bind(str(SOCKET))
-server.listen(1)
-
-
 def receive(connection, size):
     data = b""
     while len(data) < size:
@@ -213,18 +225,27 @@ def receive(connection, size):
     return data
 
 
-while True:
-    connection, _ = server.accept()
-    with connection:
-        while header := receive(connection, 4):
-            try:
-                payload = json.loads(receive(connection, int.from_bytes(header, "big")))
-                response = handle(payload)
-            except BaseException:
-                response = {
-                    "result": {"value": None, "stdout": "", "stderr": ""},
-                    "error": traceback.format_exc(),
-                    "timed_out": False,
-                }
-            data = json.dumps(response).encode()
-            connection.sendall(len(data).to_bytes(4, "big") + data)
+def serve():
+    SOCKET.unlink(missing_ok=True)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(SOCKET))
+    server.listen(1)
+    while True:
+        connection, _ = server.accept()
+        with connection:
+            while header := receive(connection, 4):
+                try:
+                    payload = json.loads(receive(connection, int.from_bytes(header, "big")))
+                    response = handle(payload)
+                except BaseException:
+                    response = {
+                        "result": {"value": None, "stdout": "", "stderr": ""},
+                        "error": traceback.format_exc(),
+                        "timed_out": False,
+                    }
+                data = json.dumps(response).encode()
+                connection.sendall(len(data).to_bytes(4, "big") + data)
+
+
+if __name__ == "__main__":
+    serve()
