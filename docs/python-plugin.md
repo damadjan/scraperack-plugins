@@ -60,6 +60,24 @@ token = secret("TOKEN")          # encrypted at rest, redacted from output
 mode = variable("MODE", "fast")
 ```
 
+## Source code
+
+Without the SDK, send Python source as the payload. If it defines `main`, the call returns
+`main(*params, **kwargs)`; otherwise it runs as a script and returns its `result` variable
+(or `null`). Output, secrets and variables work as for functions, and the warm microVM is
+the same. Compiled source is cached while a microVM is reused.
+
+```sh
+curl -H "Authorization: Bearer sr_..." -H "Content-Type: application/json"   http://controller:7070/plugins/python/api/executions -d '{"environment": "scrapers",
+  "payload": {"encoding": "python-source", "params": ["https://example.com"],
+    "source": "import httpx
+def main(url):
+    return httpx.get(url).status_code
+"}}'
+```
+
+The result is JSON when the value fits in JSON, otherwise cloudpickled.
+
 ## Python versions
 
 Functions are pickled by value with cloudpickle, so the calling program must run the same
@@ -83,7 +101,7 @@ Served at `http://<controller>:7070/plugins/python/api/`:
 | `GET/PUT/DELETE /environments/{id or name}` | Read, update, delete |
 | `POST /environments/{id or name}/restart` | Replace the environment's microVMs |
 | `GET /executions?environment=&limit=` | Newest first, with function names |
-| `POST /executions` | `{environment, payload, queue, variables, secrets}`; `payload` is a `python-function` |
+| `POST /executions` | `{environment, payload, queue, variables, secrets}`; `payload` is a `python-function` (from the SDK) or `python-source` `{source, params?, kwargs?}` |
 | `GET /executions/{id}` | One execution with logs and result |
 | `GET /executions/{id}/wait`, `/result`, `/logs`, `/payload` | As the core task endpoints |
 | `POST /runs`, `GET /runs?ids=`, `GET /runs/{id}`, `POST /runs/{id}/stop` | The [runner contract](queue-plugin.md#runner-contract), used by the queue plugin; `input` is the `POST /executions` body |
