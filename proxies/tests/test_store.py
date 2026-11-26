@@ -123,6 +123,15 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(ips(trusted=True), ["7.7.7.1", "7.7.7.2"])
         self.assertEqual(store.query_proxies(trusted=True, sort="score")[0]["worked"], 1)
 
+    def test_pages_cover_every_proxy_once(self):
+        self.alive([(f"4.4.4.{i}", True, 200, False) for i in range(1, 8)])   # equal latencies
+        pages = [store.query_proxies(limit=3, offset=offset) for offset in (0, 3, 6, 9)]
+        ips = [p["ip"] for page in pages for p in page]
+        self.assertEqual([len(page) for page in pages], [3, 3, 1, 0])
+        self.assertEqual(sorted(ips), sorted(f"4.4.4.{i}" for i in range(1, 8)))
+        self.assertEqual(store.count_proxies(), 7)
+        self.assertEqual(store.count_proxies(protocol="http"), 0)
+
     def test_reports(self):
         picked = self.alive([("6.6.6.1", True, 200, False), ("6.6.6.2", True, 250, False)])
         self.assertIsNone(store.report_proxy("1.2.3.4:9", "dead"))

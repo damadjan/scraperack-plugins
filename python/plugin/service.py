@@ -60,7 +60,10 @@ DEFAULTS = {
 }
 FIELDS = ("name", "image", *DEFAULTS)
 lock = threading.RLock()
-creating = set()        # names of environments being created, held while their packages build
+# Environments whose packages are building, by name, until they are saved; failed ones stay a
+# while with their error, so a caller that stopped waiting still learns why. Neither is saved.
+creating = {}
+FAILED_KEEP_SECS = 3600
 build_locks = {}        # build key -> lock, so one package set is built once at a time
 
 
@@ -168,6 +171,29 @@ def find(state, key):
         if environment["name"] == key:
             return environment
     raise ApiError(404, "environment not found")
+
+
+def unfinished():
+    """Environments still building or whose build failed lately; call with the lock held."""
+    cutoff = time.time() - FAILED_KEEP_SECS
+    for name in [name for name, item in creating.items()
+                 if item["status"] == "failed" and item["finished_at"] < cutoff]:
+        del creating[name]
+    return list(creating.values())
+
+
+def find_unfinished(key):
+    """The building or failed environment with this name or id; call with the lock held."""
+    for item in unfinished():
+        if key in (item["name"], item["id"]):
+            return item
+    return None
+
+
+def unfinished_view(item):
+    return {**{key: item[key] for key in ("id", "name", *FIELDS[1:])}, "ready": False,
+            "status": item["status"], "error": item.get("error"),
+            "build_started_at_ms": int(item["started_at"] * 1000)}
 
 
 # --- Building package disks ---------------------------------------------------
@@ -353,7 +379,9 @@ def apply_pool(environment):
 
 def view(environment, pools):
     pool = pools.get(environment["pool"], {})
-    return {**environment, "ready": bool(pool.get("ready")), "revision": pool.get("revision")}
+    ready = bool(pool.get("ready"))
+    return {**environment, "ready": ready, "status": "ready" if ready else "starting",
+            "revision": pool.get("revision")}
 
 
 def pools_by_name():
@@ -372,8 +400,9 @@ def unused_disk(key, state):
 # --- Environment operations -------------------------------------------------------
 
 def name_taken(name, state, own_id=None):
-    return name in creating or any(other["name"] == name and other["id"] != own_id
-                                   for other in state.values())
+    building = any(item["name"] == name and item["status"] == "building" for item in unfinished())
+    return building or any(other["name"] == name and other["id"] != own_id
+                           for other in state.values())
 
 
 def create_environment(request):
@@ -381,25 +410,41 @@ def create_environment(request):
     with lock:
         if name_taken(environment["name"], load_state()):
             raise ApiError(409, "environment name already exists")
-        creating.add(environment["name"])   # held while the packages build, outside the lock
-    try:
         environment["id"] = str(uuid.uuid4())
         environment["pool"] = f'python-{environment["id"]}'
+        # Held while the packages build, outside the lock; list and get show it as building.
+        creating[environment["name"]] = {**environment, "status": "building", "started_at": time.time()}
+    try:
         environment["venv_disk"] = ensure_disk(environment)
         apply_pool(environment)
         with lock:
             state = load_state()
             state[environment["id"]] = environment
             save_state(state)
-    finally:
+            del creating[environment["name"]]
+    except BaseException as error:
         with lock:
-            creating.discard(environment["name"])
+            creating[environment["name"]].update(
+                status="failed", finished_at=time.time(),
+                error=str(error) if isinstance(error, ApiError) else f"{type(error).__name__}: {error}")
+        raise
     return view(environment, pools_by_name())
 
 
-def update_environment(key, request):
+def require_saved(key):
+    """The saved environment; one still building or failed cannot be changed yet."""
     with lock:
-        current = dict(find(load_state(), key))
+        state = load_state()
+        item = find_unfinished(key)
+        if item and not any(key in (other["id"], other["name"]) for other in state.values()):
+            raise ApiError(409, f'environment {item["name"]} is {item["status"]}: '
+                           + ("wait for its packages to build" if item["status"] == "building"
+                              else "create it again"))
+        return find(state, key)
+
+
+def update_environment(key, request):
+    current = dict(require_saved(key))
     environment = normalize(request, current)
     with lock:
         if name_taken(environment["name"], load_state(), current["id"]):
@@ -419,15 +464,19 @@ def update_environment(key, request):
 
 
 def restart_environment(key):
-    with lock:
-        environment = find(load_state(), key)
+    environment = require_saved(key)
     core("POST", f'/v1/pools/{environment["pool"]}/restart')
     return view(environment, pools_by_name())
 
 
 def delete_environment(key):
     with lock:
-        environment = find(load_state(), key)
+        item = find_unfinished(key)
+        if item and item["status"] == "failed" and not any(
+                key in (other["id"], other["name"]) for other in load_state().values()):
+            del creating[item["name"]]    # forget a failed build
+            return
+    environment = require_saved(key)
     try:
         core("DELETE", f'/v1/pools/{environment["pool"]}')
     except ApiError as error:
@@ -855,14 +904,19 @@ def route(method, path, body, query=None):
             pools = pools_by_name()
             with lock:
                 state = load_state()
-            return 200, sorted((view(item, pools) for item in state.values()),
+                pending = [unfinished_view(item) for item in unfinished()]
+            return 200, sorted([*(view(item, pools) for item in state.values()), *pending],
                                key=lambda item: item["name"].lower())
         if method == "POST":
             return 201, create_environment(body)
     if len(parts) == 2 and parts[0] == "environments":
         if method == "GET":
             with lock:
-                environment = find(load_state(), parts[1])
+                state = load_state()
+                item = find_unfinished(parts[1])
+                if item and not any(parts[1] in (other["id"], other["name"]) for other in state.values()):
+                    return 200, unfinished_view(item)
+                environment = find(state, parts[1])
             return 200, view(environment, pools_by_name())
         if method == "PUT":
             return 200, update_environment(parts[1], body)

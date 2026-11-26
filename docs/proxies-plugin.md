@@ -54,7 +54,7 @@ curl -H "Authorization: Bearer $KEY" \
 
 | Endpoint | Returns |
 |---|---|
-| `GET /plugins/proxies/api/proxies` | Working proxies, `{count, proxies}` or one per line with `format=txt` |
+| `GET /plugins/proxies/api/proxies` | Working proxies, `{count, total, offset, next_offset, proxies}` or one per line with `format=txt` |
 | `GET /plugins/proxies/api/proxies/random` | One working proxy among the 500 checked most recently |
 | `GET /plugins/proxies/api/stats` | Counts by status, protocol and anonymity |
 | `POST /plugins/proxies/api/reports` | `{proxy, reason}`: what a program learned using a proxy |
@@ -67,10 +67,15 @@ proxies that also do CONNECT), `anonymity` (`transparent,anonymous,elite`), `cou
 codes, `US,DE`), `max_latency` (ms, to the HTTP judge), `max_https_latency` (ms, a full HTTPS
 answer through the proxy), `checked_within` (minutes), `connect=1` (HTTPS works through it)
 and `trusted=1` (HTTPS works with valid certificates, and the proxy never showed a forged one).
-`/proxies` also takes `limit` (default 100, at most 50000), `sort` (`latency`, `checked`,
-`uptime`, `score`) and, with `format=txt`, `scheme=1` for `protocol://ip:port` lines. `score`
+`/proxies` also takes `limit` (default 100, at most 50000), `offset` (skip that many; default 0),
+`sort` (`latency`, `checked`, `uptime`, `score`) and, with `format=txt`, `scheme=1` for `protocol://ip:port` lines. `score`
 puts proxies reported working in the last 6 hours first, then reliable ones (4 in 5 checks
 pass), then the fastest over HTTPS.
+
+To read the whole list, page through it: start at `offset=0` and ask again with `offset` set to
+the answer's `next_offset` until it is `null`. `total` is how many proxies match the filters.
+Pages keep a fixed order, ending on the proxy's row id, so none repeats or goes missing while
+the list stays the same; proxies tested between two pages can still move.
 
 Reports take `proxy` as `scheme://host:port` or `host:port` and one `reason`:
 

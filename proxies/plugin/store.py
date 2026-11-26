@@ -657,12 +657,13 @@ def split(value, allowed, name):
     return items
 
 
-def query_proxies(protocol=None, anonymity=None, country=None, max_latency=None, checked_within=None,
-                  limit=100, sort='latency', trusted=False, connect=False, max_https_latency=None):
-    """Working proxies. A proxy reported dead waits for its re-test (``last_checked`` NULL).
+def proxy_filter(protocol=None, anonymity=None, country=None, max_latency=None, checked_within=None,
+                 trusted=False, connect=False, max_https_latency=None):
+    """The WHERE clause and its parameters for working proxies matching these filters.
 
-    ``connect``: HTTPS works through it (CONNECT for HTTP proxies, a TLS tunnel for SOCKS).
-    ``trusted``: that, with valid certificates, and it never forged one.
+    A proxy reported dead waits for its re-test (``last_checked`` NULL). ``connect``: HTTPS works
+    through it (CONNECT for HTTP proxies, a TLS tunnel for SOCKS). ``trusted``: that, with valid
+    certificates, and it never forged one.
     """
     where, params = ["status = 'alive'", 'last_checked IS NOT NULL'], []
     if connect or trusted:
@@ -696,6 +697,22 @@ def query_proxies(protocol=None, anonymity=None, country=None, max_latency=None,
     if checked_within:
         where.append('last_checked >= ?')
         params.append(ago_ts(minutes=int(checked_within)))
+    return " AND ".join(where), params
+
+
+def count_proxies(**filters):
+    """How many working proxies match the filters of ``query_proxies``."""
+    where, params = proxy_filter(**filters)
+    return scalar(f'SELECT COUNT(*) FROM proxies WHERE {where}', params)
+
+
+def query_proxies(limit=100, offset=0, sort='latency', **filters):
+    """Working proxies matching ``proxy_filter``'s filters, one page at a time.
+
+    The order ends on the row id, so pages taken with ``offset`` neither repeat nor skip a proxy
+    while the list stays the same.
+    """
+    where, params = proxy_filter(**filters)
     order = {'latency': 'latency_ms ASC', 'checked': 'last_checked DESC',
              'uptime': 'successes DESC, latency_ms ASC',
              # Reported working lately, then reliable (4 in 5 checks pass), then fast over HTTPS.
@@ -706,8 +723,8 @@ def query_proxies(protocol=None, anonymity=None, country=None, max_latency=None,
     order_params = (ago_ts(hours=WORKED_RECENT_HOURS),) if sort == 'score' else ()
     result = rows('SELECT ip, port, protocol, https, anonymity, latency_ms, https_latency_ms, intercepts, country, '
                   'exit_ip, last_checked, checks, successes, worked, last_worked '
-                  f'FROM proxies WHERE {" AND ".join(where)} ORDER BY {order} LIMIT ?',
-                  (*params, *order_params, max(1, min(int(limit), 50000))))
+                  f'FROM proxies WHERE {where} ORDER BY {order}, id ASC LIMIT ? OFFSET ?',
+                  (*params, *order_params, max(1, min(int(limit), 50000)), max(0, int(offset))))
     for row in result:
         row['https'] = bool(row['https'])
         row['intercepts'] = bool(row['intercepts'])

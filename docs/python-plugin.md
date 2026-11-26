@@ -96,8 +96,8 @@ Served at `http://<controller>:7070/plugins/python/api/`:
 
 | Endpoint | |
 |---|---|
-| `GET /environments` | Environments and whether their disks reached every node |
-| `POST /environments` | Create; blocks until packages are built |
+| `GET /environments` | Environments with their `status` (below) |
+| `POST /environments` | Create; blocks until packages are built (often 1 to 3 minutes) |
 | `GET/PUT/DELETE /environments/{id or name}` | Read, update, delete |
 | `POST /environments/{id or name}/restart` | Replace the environment's microVMs |
 | `GET /executions?environment=&limit=` | Newest first, with function names |
@@ -105,6 +105,13 @@ Served at `http://<controller>:7070/plugins/python/api/`:
 | `GET /executions/{id}` | One execution with logs and result |
 | `GET /executions/{id}/wait`, `/result`, `/logs`, `/payload` | As the core task endpoints |
 | `POST /runs`, `GET /runs?ids=`, `GET /runs/{id}`, `POST /runs/{id}/stop` | The [runner contract](queue-plugin.md#runner-contract), used by the queue plugin; `input` is the `POST /executions` body |
+
+An environment's `status` is `building` while its packages install, `failed` when that build
+failed (with `error`), `starting` until every node has prepared its pool, then `ready`.
+The build carries on if the caller stops waiting for `POST /environments`, and the environment
+shows as `building` meanwhile; its name is taken. A failed build stays listed for an hour, or
+until the name is created again or the failed environment is deleted. Building and failed
+environments cannot be updated or restarted.
 
 Each execution is a core task on the environment's pool; IDs are the same. Runs are the same
 executions: a run's id is its execution's id. A run fails with `code` when the function

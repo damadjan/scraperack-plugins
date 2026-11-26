@@ -222,7 +222,8 @@ async function refresh() {
     <tr data-id="${escape(env.id)}">
       <td>${escape(env.name)}</td><td>${escape(images[env.image]?.name || env.image.slice(0, 8))}</td>
       <td>${env.packages.length}</td>
-      <td><span class="pill ${env.ready ? "ready" : "syncing"}">${env.ready ? "ready" : "syncing"}</span></td>
+      <td><span class="pill ${env.status === "ready" ? "ready" : "syncing"}"
+        title="${escape(env.error || "")}">${escape(env.status)}</span></td>
       <td>${env.cpu_millis / 1000}</td><td>${env.memory_mib}</td><td>${env.warm_instances}</td>
       <td>${env.max_instances ?? "—"}</td><td>${env.network ? "yes" : "no"}</td>
       <td class="mono">${escape(env.id)}</td>
