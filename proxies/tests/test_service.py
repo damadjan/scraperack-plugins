@@ -109,7 +109,8 @@ class ServiceTest(unittest.TestCase):
 
     def test_public_api_leaves_keys_to_scraperack(self):
         status, body = self.call("GET", "/api/proxies")
-        self.assertEqual((status, body), (200, {"count": 0, "proxies": []}))
+        self.assertEqual((status, body), (200, {"count": 0, "total": 0, "offset": 0, "next_offset": None,
+                                                 "proxies": []}))
         self.assertEqual(self.call("GET", "/api/proxies", query="format=txt")[1], "")
         with self.assertRaises(service.ApiError):   # the plugin no longer manages keys
             self.call("GET", "/api/keys")

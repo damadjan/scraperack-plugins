@@ -235,10 +235,37 @@ class ServiceTests(unittest.TestCase):
         with self.assertRaises(self.service.ApiError) as duplicate:
             self.request("POST", "/api/environments", {"name": "jobs", "image": "img"})
         self.assertEqual(duplicate.exception.status, 409)
+        # A caller that stopped waiting still finds it, as building.
+        _, listed = self.request("GET", "/api/environments")
+        self.assertEqual([(item["name"], item["status"], item["ready"]) for item in listed],
+                         [("jobs", "building", False)])
+        self.assertEqual(self.request("GET", "/api/environments/jobs")[1]["status"], "building")
+        with self.assertRaises(self.service.ApiError) as busy:
+            self.request("PUT", "/api/environments/jobs", {"warm_instances": 1})
+        self.assertEqual(busy.exception.status, 409)
         release.set()
         first.join()
         self.assertEqual([item["name"] for item in self.service.load_state().values()], ["jobs"])
-        self.assertEqual(self.service.creating, set())
+        self.assertEqual(self.service.creating, {})
+        self.assertEqual(self.request("GET", "/api/environments/jobs")[1]["status"], "ready")
+
+    def test_a_failed_build_keeps_its_error_until_created_again(self):
+        def failing_build(image, packages):
+            raise self.service.ApiError(400, "installing packages failed: no such package")
+
+        self.service.build_venv_disk = failing_build
+        with self.assertRaises(self.service.ApiError):
+            self.request("POST", "/api/environments", {"name": "jobs", "image": "img"})
+        _, failed = self.request("GET", "/api/environments/jobs")
+        self.assertEqual((failed["status"], failed["error"]),
+                         ("failed", "installing packages failed: no such package"))
+        self.assertEqual(self.request("DELETE", "/api/environments/jobs"), (204, None))
+        self.assertEqual(self.request("GET", "/api/environments")[1], [])
+        self.service.build_venv_disk = lambda image, packages: "venv-1"
+        self.service.creating["jobs"] = {**failed, "pool": "p", "started_at": 0, "finished_at": 0}
+        _, created = self.request("POST", "/api/environments", {"name": "jobs", "image": "img"})
+        self.assertEqual(created["name"], "jobs")
+        self.assertEqual(self.service.creating, {})
 
     def test_packages_are_built_in_a_builder_microvm(self):
         calls, archive = [], base64.b64encode(b"packed venv").decode()

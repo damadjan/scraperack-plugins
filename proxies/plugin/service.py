@@ -614,11 +614,17 @@ def public_route(method, parts, query, headers, body=None):
     if fmt not in ("json", "txt"):
         raise ApiError(422, "format must be json or txt")
     if parts == ["proxies"]:
-        rows = store.query_proxies(limit=number(query, "limit", 1, 50000) or 100,
-                                   sort=first(query, "sort", "latency"), **proxy_filters(query))
+        filters = proxy_filters(query)
+        offset = number(query, "offset", 0) or 0
+        rows = store.query_proxies(limit=number(query, "limit", 1, 50000) or 100, offset=offset,
+                                   sort=first(query, "sort", "latency"), **filters)
         if fmt == "txt":
             return 200, text_list(rows, first(query, "scheme") in ("1", "true", "yes"))
-        return 200, {"count": len(rows), "proxies": rows}
+        total = store.count_proxies(**filters)
+        following = offset + len(rows)
+        return 200, {"count": len(rows), "total": total, "offset": offset,
+                     "next_offset": following if rows and following < total else None,
+                     "proxies": rows}
     rows = store.query_proxies(limit=500, sort="checked", **proxy_filters(query))
     if not rows:
         raise ApiError(404, "no proxy matches these filters")
