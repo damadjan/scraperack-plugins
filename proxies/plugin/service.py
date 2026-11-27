@@ -528,12 +528,11 @@ def capacity_report():
     cfg = store.get_settings()
     counts = store.capacity_counts()
     untested = counts["new"]
-    scrape = store.last_runs()["scrape"]
-    found = (scrape or {}).get("summary") or {}
+    found = store.last_scrape_summary()
     ceiling = cfg["test_rate_ceiling"] or cfg["test_rate_max"]
     testing_behind = untested > UNTESTED_BACKLOG
     sources = {"label": "Sources", "used": store.enabled_source_count(), "unit": "enabled",
-               "note": f"{found.get('new', 0):,} new proxies last scrape" if found else "No scrape yet"}
+               "note": f"{found.get('new', 0):,} new proxies last scrape" if found else "No scrape finished yet"}
     rate = {"label": "Test rate", "used": round(scheduler.rate), "total": cfg["test_rate_max"], "unit": "conn/s"}
     if ceiling < cfg["test_rate_max"]:
         rate["note"] = f"Network trouble capped it at {ceiling}/s"
