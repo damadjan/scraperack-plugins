@@ -375,6 +375,12 @@ def enabled_sources():
     return rows('SELECT id, url FROM sources WHERE enabled = 1 ORDER BY id')
 
 
+def last_scrape_summary():
+    """The summary of the last scrape that finished, or None."""
+    found = scalar("SELECT summary FROM runs WHERE kind = 'scrape' AND status = 'done' ORDER BY id DESC LIMIT 1")
+    return json.loads(found) if found else None
+
+
 def enabled_source_count():
     return scalar('SELECT COUNT(*) FROM sources WHERE enabled = 1')
 

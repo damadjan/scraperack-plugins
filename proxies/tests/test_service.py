@@ -75,6 +75,10 @@ class ServiceTest(unittest.TestCase):
         store.add_sources(["https://a.example/list"])
         source = store.enabled_sources()[0]["id"]
         bottleneck = lambda: [r["label"] for r in service.capacity_report()["resources"] if r.get("bottleneck")]
+        run = store.start_run("scrape")
+        store.finish_run(run, "done", {"new": 7})
+        store.start_run("scrape")  # still running: the note reads the last finished one
+        self.assertEqual(service.capacity_report()["resources"][0]["note"], "7 new proxies last scrape")
         store.store_scrape_result(source, {"ok": True, "proxies": [(f"9.9.{i // 250}.{i % 250}", 80, None)
                                                                    for i in range(101)]})
         self.assertEqual(bottleneck(), ["Test rate"])  # 101 untested wait for a test
