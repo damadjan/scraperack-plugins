@@ -591,29 +591,6 @@ def reconcile():
             report(f"reconcile {template['name']} failed")
 
 
-def capacity_report():
-    """Running desktops out of the ones asked to run (queued, moving, starting...)."""
-    with lock:
-        workspaces = list(load(WORKSPACES).values())
-    wanted = [w for w in workspaces if w["status"] in ACTIVE - {"stopping", "suspending"}]
-    running = sum(1 for w in wanted if w["status"] == "running")
-    return {
-        "output": {"label": "Workspaces running", "ready": running, "target": len(wanted) or None},
-        "queued": sum(1 for w in wanted if w["status"] == "queued"),
-    }
-
-
-def report_capacity_forever():
-    """Tell the core what this plugin delivers and what limits it, for the homepage funnels.
-    Reports expire after 30 seconds, so a stuck plugin drops off on its own."""
-    while True:
-        try:
-            core("PUT", "/v1/capacity", capacity_report())
-        except Exception:  # noqa: BLE001 - best effort; the next round tries again
-            pass
-        time.sleep(10)
-
-
 def background():
     """Reconcile once, then monitor workspaces forever."""
     try:
@@ -728,7 +705,6 @@ def main():
     server = ThreadingUnixStreamServer(PLUGIN_SOCKET, Handler)
     server.daemon_threads = True
     threading.Thread(target=background, daemon=True).start()
-    threading.Thread(target=report_capacity_forever, daemon=True).start()
     print(f"{PLUGIN} plugin listening on {PLUGIN_SOCKET}", file=sys.stderr, flush=True)
     server.serve_forever()
 
