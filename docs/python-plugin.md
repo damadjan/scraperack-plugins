@@ -8,7 +8,11 @@ dependencies of its own.
 
 1. **Packages are built once.** They are installed into a virtualenv in a short-lived
    `python-build-…` microVM of the image (2 vCPUs, 2 GiB, network on), and the virtualenv
-   becomes a read-only disk that every node caches. The same image and packages reuse it.
+   becomes a read-only disk that every node caches. The same image and package list reuse
+   it, so a requirement without a version (`httpx`) keeps the release it got the first
+   time, for every environment with that list. Pin versions (`httpx==0.28.1`), or
+   rebuild to get the newest. `installed` lists what pip actually installed, as
+   `name==version`.
 2. **The interpreter is started before the snapshot.** Each environment is one Scraperack
    pool. When a node first prepares the pool, it boots a microVM, mounts the virtualenv,
    starts the plugin's executor with the virtualenv's Python, and imports the `preload`
@@ -27,7 +31,7 @@ An environment's name and ID both work wherever an environment is expected.
 |---|---|---|
 | `name` | | Letters, digits, spaces, `.`, `_`, `-` (up to 64) |
 | `image` | | An image with `/usr/bin/python3` and its `venv` module |
-| `packages` | `[]` | pip requirements, for example `httpx==0.28.1` |
+| `packages` | `[]` | pip requirements, for example `httpx==0.28.1`; pin versions |
 | `preload` | `[]` | Modules imported before the snapshot, so calls find them loaded |
 | `cpu_millis`, `memory_mib`, `disk_mib` | 1000, 512, 1024 | Size of each microVM |
 | `timeout_secs` | 300 | Hard limit per execution |
@@ -39,7 +43,8 @@ An environment's name and ID both work wherever an environment is expected.
 
 Changing packages or the image rebuilds the disk; changing `preload` or the microVM size
 takes a new snapshot; other changes apply right away. Restart replaces the environment's
-microVMs.
+microVMs. Rebuild installs the packages again, even when they did not change, and replaces
+the microVMs.
 
 ## Executions
 
@@ -100,6 +105,7 @@ Served at `http://<controller>:7070/plugins/python/api/`:
 | `POST /environments` | Create; blocks until packages are built (often 1 to 3 minutes) |
 | `GET/PUT/DELETE /environments/{id or name}` | Read, update, delete |
 | `POST /environments/{id or name}/restart` | Replace the environment's microVMs |
+| `POST /environments/{id or name}/rebuild` | Install the packages again, then replace the microVMs; blocks like create |
 | `GET /executions?environment=&limit=` | Newest first, with function names |
 | `POST /executions` | `{environment, payload, queue, variables, secrets}`; `payload` is a `python-function` (from the SDK) or `python-source` `{source, params?, kwargs?}` |
 | `GET /executions/{id}` | One execution with logs and result |

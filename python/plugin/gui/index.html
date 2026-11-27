@@ -159,12 +159,15 @@
           <label>Python packages<textarea name="packages" placeholder="httpx==0.28.1&#10;beautifulsoup4==4.14.2"></textarea></label>
           <label>Preload modules<textarea name="preload" placeholder="httpx&#10;bs4"></textarea></label>
         </div>
+        <div class="muted" id="installed" hidden></div>
       </div>
       <div class="status muted" id="status"></div>
     </div>
     <div class="editor-foot">
       <button type="button" class="secondary" id="delete" hidden>Delete</button>
       <button type="button" class="secondary" id="restart" hidden>Restart VMs</button>
+      <button type="button" class="secondary" id="rebuild" hidden
+        title="Install the packages again; ones without a version get their newest release">Rebuild packages</button>
       <span class="space"></span>
       <button type="button" class="secondary" id="dismiss">Cancel</button>
       <button type="submit" id="save">Create environment</button>
@@ -234,7 +237,8 @@ function edit(env) {
   editing = env;
   document.getElementById("form-title").textContent = env ? `Edit ${env.name}` : "Create Python environment";
   document.getElementById("save").textContent = env ? "Save changes" : "Create environment";
-  for (const id of ["restart", "delete"]) document.getElementById(id).hidden = !env;
+  for (const id of ["restart", "rebuild", "delete"]) document.getElementById(id).hidden = !env;
+  showInstalled(env);
   const value = env || {name: "", cpu_millis: 1000, memory_mib: 512, disk_mib: 1024, warm_instances: 0,
     max_instances: 8, timeout_secs: 300, idle_timeout_secs: 30, reuse: true, network: true,
     packages: [], preload: [], image: form.image.value};
@@ -252,6 +256,12 @@ function edit(env) {
   setNotice("");
   if (!editor.open) editor.showModal();
   form.env_name.focus();
+}
+
+function showInstalled(env) {
+  const element = document.getElementById("installed");
+  element.hidden = !env?.installed;
+  element.textContent = env?.installed ? `Installed: ${env.installed.join(", ") || "nothing"}` : "";
 }
 
 function closeEditor(message) {
@@ -304,6 +314,12 @@ editor.addEventListener("cancel", event => { event.preventDefault(); closeEditor
 document.getElementById("restart").onclick = () => busy(null, "Restarting VMs…", async () => {
   await api("POST", `environments/${encodeURIComponent(editing.id)}/restart`);
   setStatus(`Restarted ${editing.name}; new microVMs start in the background`);
+});
+document.getElementById("rebuild").onclick = () => busy(null, "Rebuilding packages… this can take a few minutes", async () => {
+  editing = await api("POST", `environments/${encodeURIComponent(editing.id)}/rebuild`);
+  showInstalled(editing);
+  await refresh();
+  setStatus(`Rebuilt ${editing.name}; new microVMs start in the background`);
 });
 document.getElementById("delete").onclick = () => {
   if (!confirm(`Delete environment ${editing.name}?`)) return;

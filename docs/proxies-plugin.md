@@ -91,6 +91,15 @@ same `/plugins/proxies/api/` and need the same key on port 7070. The page itself
 through the Scraperack GUI without one. Other plugins call the API through their core socket,
 which needs no key.
 
+## Not per site
+
+Proxies are tested in general: they connect, they speak their protocol, HTTPS works through
+them. They are never tested against a particular target site, and there is no "a working
+proxy for this site" call. One cluster serves many projects at once, and testing every proxy
+against every project's sites would multiply the tester's connections past what the link
+tolerates. To find proxies that work for your site, take a batch from `GET /proxies`, test it
+against your site from your own job, and send what you learned to `POST /reports`.
+
 ## How it works
 
 **Scraper.** Every `scrape_interval_min`, enabled sources are split into batches and fetched in

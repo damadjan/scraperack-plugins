@@ -119,6 +119,7 @@ py.create_environment("scrapers", image["id"], packages=["httpx==0.28.1"],
                       preload=["httpx"], cpu=0.5, memory_mib=512, warm=2, max_instances=20)
 py.update_environment("scrapers", warm=4)        # packages are rebuilt only if they change
 py.restart_environment("scrapers")
+py.rebuild_environment("scrapers")    # install the packages again (see installed versions)
 py.environments()
 py.delete_environment("scrapers")
 ```
