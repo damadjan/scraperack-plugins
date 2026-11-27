@@ -78,7 +78,7 @@ class ServiceTest(unittest.TestCase):
         run = store.start_run("scrape")
         store.finish_run(run, "done", {"new": 7})
         store.start_run("scrape")  # still running: the note reads the last finished one
-        self.assertEqual(service.capacity_report()["resources"][0]["note"], "7 new proxies last scrape")
+        self.assertEqual(service.capacity_report()["resources"][0]["note"], "7 new last scrape")
         store.store_scrape_result(source, {"ok": True, "proxies": [(f"9.9.{i // 250}.{i % 250}", 80, None)
                                                                    for i in range(101)]})
         self.assertEqual(bottleneck(), ["Test rate"])  # 101 untested wait for a test
