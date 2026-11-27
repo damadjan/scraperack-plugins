@@ -518,19 +518,38 @@ class Scheduler:
 
 # --- Capacity ----------------------------------------------------------------------
 
+UNTESTED_BACKLOG = 100  # more untested proxies than this waiting: testing is what holds trusted proxies back
+
+
 def capacity_report():
-    """Trusted proxies are what programs get; the test rate caps how fast new ones are found."""
+    """Trusted proxies come from sources, through testing. A fixed rule names what holds them
+    back: a backlog of untested proxies means the test rate; no backlog means too few new
+    proxies are found."""
     cfg = store.get_settings()
     counts = store.capacity_counts()
+    untested = counts["new"]
+    scrape = store.last_runs()["scrape"]
+    found = (scrape or {}).get("summary") or {}
+    ceiling = cfg["test_rate_ceiling"] or cfg["test_rate_max"]
+    testing_behind = untested > UNTESTED_BACKLOG
+    sources = {"label": "Sources", "used": store.enabled_source_count(), "unit": "enabled",
+               "note": f"{found.get('new', 0):,} new proxies last scrape" if found else "No scrape yet"}
+    rate = {"label": "Test rate", "used": round(scheduler.rate), "total": cfg["test_rate_max"], "unit": "conn/s"}
+    if ceiling < cfg["test_rate_max"]:
+        rate["note"] = f"Network trouble capped it at {ceiling}/s"
+    if testing_behind:
+        rate.update(bottleneck=True, hint="Testing can't keep up: raise test_rate_max if the network link "
+                                          "can take it, or the tester pool's VM limit")
+    else:
+        sources.update(bottleneck=True, hint="Few new proxies found: the scraper is overwhelmed or there "
+                                             "aren't enough sources. Add sources")
     return {
         "output": {"label": "Trusted proxies", "ready": counts["trusted"], "unit": "proxies"},
         "resources": [
+            sources,
+            {"label": "Untested", "used": untested, "unit": "proxies"},
+            rate,
             {"label": "Alive", "used": counts["alive"], "unit": "proxies"},
-            {"label": "Untested", "used": counts["new"], "unit": "proxies"},
-            # The rate only limits anything while untested proxies wait for it.
-            {"label": "Test rate", "used": round(scheduler.rate),
-             "total": cfg["test_rate_max"] if counts["new"] else None,
-             "unit": "conn/s", "hint": "Raise test_rate_max if the network link can take it"},
         ],
     }
 

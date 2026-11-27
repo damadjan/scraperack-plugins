@@ -357,35 +357,16 @@ def stop_runs(stopped):
 # --- Background upkeep ------------------------------------------------------------------
 
 def upkeep_forever():
-    """Forget old jobs and report the queues on the core's capacity page."""
+    """Forget old jobs."""
     last_prune = 0.0
     while True:
         try:
             if time.monotonic() - last_prune > 600:
                 last_prune = time.monotonic()
                 store.prune(store.settings()["retention_hours"])
-            report_capacity()
         except Exception:
             traceback.print_exc()
         time.sleep(5)
-
-
-def report_capacity():
-    queues = store.queues()
-    counts = store.counts()
-    running = store.running()
-    try:
-        core("PUT", "/v1/capacity", {
-            "output": {"label": "Jobs running", "ready": len(running)},
-            "dependencies": sorted({job["runner"] for job in running})[:12],
-            "resources": [{"label": "Concurrency", "used": len(running),
-                           "total": sum(queue["concurrency"] for queue in queues
-                                        if not queue["paused"]) or None, "unit": "jobs",
-                           "hint": "Raise a queue's concurrency"}],
-            "queued": sum(count["queued"] for count in counts.values()),
-        })
-    except (OSError, ApiError):
-        pass
 
 
 # --- API --------------------------------------------------------------------------------

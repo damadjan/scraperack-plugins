@@ -375,6 +375,10 @@ def enabled_sources():
     return rows('SELECT id, url FROM sources WHERE enabled = 1 ORDER BY id')
 
 
+def enabled_source_count():
+    return scalar('SELECT COUNT(*) FROM sources WHERE enabled = 1')
+
+
 def store_scrape_result(source_id, result):
     """Save one URL's scrape result; returns (found, new)."""
     ts = now()

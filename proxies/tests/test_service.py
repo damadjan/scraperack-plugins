@@ -71,6 +71,17 @@ class ServiceTest(unittest.TestCase):
         from urllib.parse import parse_qs
         return service.route(method, path, body or {}, parse_qs(query), headers or {})
 
+    def test_capacity_names_test_rate_or_sources_as_bottleneck(self):
+        store.add_sources(["https://a.example/list"])
+        source = store.enabled_sources()[0]["id"]
+        bottleneck = lambda: [r["label"] for r in service.capacity_report()["resources"] if r.get("bottleneck")]
+        store.store_scrape_result(source, {"ok": True, "proxies": [(f"9.9.{i // 250}.{i % 250}", 80, None)
+                                                                   for i in range(101)]})
+        self.assertEqual(bottleneck(), ["Test rate"])  # 101 untested wait for a test
+        store.store_scrape_result(source, {"ok": True, "proxies": [("9.9.9.9", 80, None)]})
+        store.db().execute("DELETE FROM proxies WHERE ip != '9.9.9.9'")
+        self.assertEqual(bottleneck(), ["Sources"])  # testing keeps up: too few new proxies are found
+
     def test_pools_use_cached_package_disk_and_guest(self):
         service.scheduler.ensure_pools(store.get_settings())
         scraper = self.core.pools["proxies-scraper"]

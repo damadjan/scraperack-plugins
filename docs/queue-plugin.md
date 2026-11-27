@@ -115,8 +115,7 @@ Served at `http://<controller>:7070/plugins/queue/api/`:
 | `GET/PUT /settings` | `retention_hours` |
 
 Counts per queue: `queued`, `running`, `done`, `failed`, `cancelled`, and
-`finished_last_minute`. The plugin also reports running and waiting jobs on the core's
-capacity page.
+`finished_last_minute`.
 
 A job's `input` is at most 1 MiB. It is stored in SQLite on the controller until the job
 ends, secrets included.

@@ -259,16 +259,7 @@ class QueueTests(unittest.TestCase):
         self.assertEqual(self.core.stops, ["run-2"])
         self.assertEqual(self.request("GET", "/api/queues")[1], [])
 
-    def test_capacity_report_and_settings(self):
-        self.request("PUT", "/api/queues/scrape", {"concurrency": 4})
-        self.put("scrape", 6)
-        self.tick()
-        self.service.report_capacity()
-        self.assertEqual(self.core.capacity, {
-            "output": {"label": "Jobs running", "ready": 4},
-            "dependencies": ["python"],
-            "resources": [{"label": "Concurrency", "used": 4, "total": 4, "unit": "jobs",
-                           "hint": "Raise a queue's concurrency"}], "queued": 2})
+    def test_settings(self):
         self.assertEqual(self.request("PUT", "/api/settings", {"retention_hours": 24})[1],
                          {"retention_hours": 24})
         with self.assertRaises(self.service.ApiError):

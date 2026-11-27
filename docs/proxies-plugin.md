@@ -131,6 +131,10 @@ adding to it. Countries come from the free DB-IP Lite database, downloaded month
 the tester starts at `test_rate_min` connections/s across the cluster and ramps up about 8% a
 minute to `test_rate_max`. Scraping and testing never run at the same time.
 
+**Homepage.** The proxies funnel on Home names one bottleneck by a fixed rule: with more than
+100 untested proxies waiting, it is the test rate; otherwise too few new proxies are found
+(the scraper is overwhelmed or there aren't enough sources).
+
 **Dead proxies.** A proxy that never worked and fails its test is not tested again while any
 source still lists it, so a re-scrape cannot bring it back. Free proxies often fail one check and
 come back, so a proxy that has worked before and is still listed is re-tested
