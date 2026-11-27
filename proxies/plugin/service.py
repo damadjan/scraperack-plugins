@@ -532,16 +532,16 @@ def capacity_report():
     ceiling = cfg["test_rate_ceiling"] or cfg["test_rate_max"]
     testing_behind = untested > UNTESTED_BACKLOG
     sources = {"label": "Sources", "used": store.enabled_source_count(), "unit": "enabled",
-               "note": f"{found.get('new', 0):,} new proxies last scrape" if found else "No scrape finished yet"}
+               "note": f"{found.get('new', 0):,} new last scrape" if found else "No scrape finished yet"}
     rate = {"label": "Test rate", "used": round(scheduler.rate), "total": cfg["test_rate_max"], "unit": "conn/s"}
-    if ceiling < cfg["test_rate_max"]:
-        rate["note"] = f"Network trouble capped it at {ceiling}/s"
+    capped = ceiling < cfg["test_rate_max"]
+    if capped:
+        rate["note"] = f"Capped at {ceiling}/s"
     if testing_behind:
-        rate.update(bottleneck=True, hint="Testing can't keep up: raise test_rate_max if the network link "
-                                          "can take it, or the tester pool's VM limit")
+        rate.update(bottleneck=True, hint="Network trouble capped it: clear test_rate_ceiling" if capped
+                    else "Raise test_rate_max")
     else:
-        sources.update(bottleneck=True, hint="Few new proxies found: the scraper is overwhelmed or there "
-                                             "aren't enough sources. Add sources")
+        sources.update(bottleneck=True, hint="Scraper overwhelmed or too few sources")
     return {
         "output": {"label": "Trusted proxies", "ready": counts["trusted"], "unit": "proxies"},
         "resources": [
