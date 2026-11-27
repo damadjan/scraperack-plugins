@@ -534,15 +534,11 @@ def capacity_report():
     sources = {"label": "Sources", "used": store.enabled_source_count(), "unit": "enabled",
                "note": f"{found.get('new', 0):,} new last scrape" if found else "No scrape finished yet"}
     rate = {"label": "Test rate", "used": round(scheduler.rate), "total": cfg["test_rate_max"], "unit": "conn/s"}
-    capped = ceiling < cfg["test_rate_max"]
-    if capped:
+    if ceiling < cfg["test_rate_max"]:
         rate["note"] = f"Capped at {ceiling}/s"
-    if testing_behind:
-        rate.update(bottleneck=True, hint="Network trouble capped it: clear test_rate_ceiling" if capped
-                    else "Raise test_rate_max")
-    else:
-        sources.update(bottleneck=True, hint="Scraper overwhelmed or too few sources")
+    (rate if testing_behind else sources)["bottleneck"] = True
     return {
+        "position": 10,
         "output": {"label": "Trusted proxies", "ready": counts["trusted"], "unit": "proxies"},
         "resources": [
             sources,
