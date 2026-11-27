@@ -26,6 +26,19 @@ input is kept until the job ends, then dropped. What a job produces (rows, files
 goes wherever the job sends it, never back to the queue. Logs stay with the runner (for
 Python, on the Executions tab, for the controller's task retention).
 
+## Big crawls and long work
+
+A run has a time limit (the Python environment's `timeout_secs`). For a big crawl or long
+work, don't start one long run: split it into many small jobs, for example one per URL or per
+page of results, and put them in a queue. The queue keeps `concurrency` of them running,
+retries the ones that fail, and carries on after restarts. Jobs run at least once, so make
+them safe to repeat.
+
+Jobs keep no results. Write them to your own storage from the job, or read them from the
+job's runs: `GET /jobs/{id}` lists its attempts with their run ids, and the runner keeps each
+run's result (for Python, `GET /plugins/python/api/executions/{run id}`) as long as the
+controller keeps finished tasks. Keep such results small.
+
 ## From Python
 
 ```python

@@ -99,6 +99,10 @@ class FakeCore:
         raise AssertionError(f"unexpected call {method} {path}")
 
 
+def built(disk, installed=("httpx==0.28.1",)):
+    return lambda image, packages, fresh=False: {"disk": disk, "installed": list(installed)}
+
+
 class ServiceTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -109,7 +113,7 @@ class ServiceTests(unittest.TestCase):
         self.service = importlib.import_module("service")
         self.core = FakeCore()
         self.service.core = self.core
-        self.service.build_venv_disk = lambda image, packages: "venv-1"
+        self.service.build_venv_disk = built("venv-1")
 
     def tearDown(self):
         sys.path.remove(str(PLUGIN))
@@ -204,7 +208,7 @@ class ServiceTests(unittest.TestCase):
 
     def test_update_delete_and_disk_cleanup(self):
         _, environment = self.request("POST", "/api/environments", {"name": "jobs", "image": "img"})
-        self.service.build_venv_disk = lambda image, packages: "venv-2"
+        self.service.build_venv_disk = built("venv-2")
         self.core.disks["venv-2"] = {"key": "venv-2"}
         _, updated = self.request("PUT", f'/api/environments/{environment["id"]}',
                                   {"packages": ["lxml==6.0.0"], "warm_instances": 1})
@@ -214,6 +218,25 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.core.pools, {})
         self.assertNotIn("venv-2", self.core.disks)
 
+    def test_installed_versions_are_shown_and_rebuild_installs_again(self):
+        _, environment = self.request("POST", "/api/environments",
+                                      {"name": "jobs", "image": "img", "packages": ["httpx"]})
+        self.assertEqual(environment["installed"], ["httpx==0.28.1"])
+        fresh = []
+
+        def rebuild(image, packages, fresh_build=False):
+            fresh.append(fresh_build)
+            return {"disk": "venv-2", "installed": ["httpx==0.29.0"]}
+
+        self.service.build_venv_disk = rebuild
+        self.core.disks["venv-2"] = {"key": "venv-2"}
+        _, rebuilt = self.request("POST", "/api/environments/jobs/rebuild")
+        self.assertEqual((rebuilt["venv_disk"], rebuilt["installed"], fresh),
+                         ("venv-2", ["httpx==0.29.0"], [True]))
+        self.assertNotIn("venv-1", self.core.disks)
+        self.assertEqual(self.request("GET", "/api/environments/jobs")[1]["installed"],
+                         ["httpx==0.29.0"])
+
     def test_cloudpickle_is_pinned_unless_the_environment_pins_it(self):
         self.assertEqual(self.service.with_cloudpickle(["httpx"]), ["cloudpickle==3.1.2", "httpx"])
         self.assertEqual(self.service.with_cloudpickle(["cloudpickle==3.0.0"]), ["cloudpickle==3.0.0"])
@@ -222,10 +245,10 @@ class ServiceTests(unittest.TestCase):
     def test_a_name_being_created_is_taken(self):
         started, release = threading.Event(), threading.Event()
 
-        def slow_build(image, packages):
+        def slow_build(image, packages, fresh=False):
             started.set()
             release.wait(5)
-            return "venv-1"
+            return {"disk": "venv-1", "installed": []}
 
         self.service.build_venv_disk = slow_build
         first = threading.Thread(target=self.request, args=(
@@ -250,7 +273,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(self.request("GET", "/api/environments/jobs")[1]["status"], "ready")
 
     def test_a_failed_build_keeps_its_error_until_created_again(self):
-        def failing_build(image, packages):
+        def failing_build(image, packages, fresh=False):
             raise self.service.ApiError(400, "installing packages failed: no such package")
 
         self.service.build_venv_disk = failing_build
@@ -261,7 +284,7 @@ class ServiceTests(unittest.TestCase):
                          ("failed", "installing packages failed: no such package"))
         self.assertEqual(self.request("DELETE", "/api/environments/jobs"), (204, None))
         self.assertEqual(self.request("GET", "/api/environments")[1], [])
-        self.service.build_venv_disk = lambda image, packages: "venv-1"
+        self.service.build_venv_disk = built("venv-1")
         self.service.creating["jobs"] = {**failed, "pool": "p", "started_at": 0, "finished_at": 0}
         _, created = self.request("POST", "/api/environments", {"name": "jobs", "image": "img"})
         self.assertEqual(created["name"], "jobs")
@@ -269,6 +292,7 @@ class ServiceTests(unittest.TestCase):
 
     def test_packages_are_built_in_a_builder_microvm(self):
         calls, archive = [], base64.b64encode(b"packed venv").decode()
+        built_value = {"archive": archive, "installed": ["httpx==0.28.1"]}
 
         def core(method, path, body=None, file=None, timeout=120):
             calls.append((method, path, body))
@@ -277,12 +301,13 @@ class ServiceTests(unittest.TestCase):
             if path == "/v1/tasks/t1/wait":
                 return {"id": "t1", "status": "succeeded"}
             if path == "/v1/tasks/t1/result":
-                return {"status": "succeeded", "value": {"encoding": "json", "data": archive}}
+                return {"status": "succeeded", "value": {"encoding": "json", "data": built_value}}
             return None
 
         self.service.core = core
         image = {"id": "img", "name": "python", "sha256": "abc"}
-        self.assertEqual(self.service.run_build(image, ["httpx==0.28.1"], "k" * 64), b"packed venv")
+        self.assertEqual(self.service.run_build(image, ["httpx==0.28.1"], "k" * 64),
+                         (b"packed venv", ["httpx==0.28.1"]))
         pool = calls[0][2]
         self.assertEqual((calls[0][0], pool["name"], pool["reuse"]), ("POST", "python-build-kkkkkkkkkkkk", False))
         self.assertEqual(pool["executor"], ["/usr/bin/python3", "/tmp/scraperack/python/executor.py"])

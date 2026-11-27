@@ -10,6 +10,7 @@ class Environment(TypedDict):
     name: str
     image: str
     packages: list[str]
+    installed: list[str]
     preload: list[str]
     pool: str
     venv_disk: str | None

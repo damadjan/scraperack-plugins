@@ -158,6 +158,10 @@ class Python:
     def restart_environment(self, environment: str) -> Environment:
         return self._call("POST", f"/environments/{_key(environment)}/restart")
 
+    def rebuild_environment(self, environment: str) -> Environment:
+        """Install the packages again; requirements without a version get their newest release."""
+        return self._call("POST", f"/environments/{_key(environment)}/rebuild", timeout=None)
+
     def delete_environment(self, environment: str) -> None:
         self._call("DELETE", f"/environments/{_key(environment)}")
 
@@ -281,6 +285,10 @@ class AsyncPython:
 
     async def restart_environment(self, environment: str) -> Environment:
         return await self._call("POST", f"/environments/{_key(environment)}/restart")
+
+    async def rebuild_environment(self, environment: str) -> Environment:
+        """Install the packages again; requirements without a version get their newest release."""
+        return await self._call("POST", f"/environments/{_key(environment)}/rebuild", timeout=None)
 
     async def delete_environment(self, environment: str) -> None:
         await self._call("DELETE", f"/environments/{_key(environment)}")

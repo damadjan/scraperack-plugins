@@ -244,6 +244,8 @@ def main(packages):
         process = subprocess.run(command, capture_output=True, text=True)
         if process.returncode:
             raise RuntimeError((process.stderr or process.stdout)[-4000:])
+    installed = subprocess.run([VENV + "/bin/python", "-m", "pip", "freeze"],
+                               capture_output=True, text=True, check=True).stdout.splitlines()
     # pip and setuptools are not needed to run anything; leaving them out halves the disk.
     for pattern in ("pip", "pip-*", "setuptools", "setuptools-*", "pkg_resources", "_distutils_hack",
                     "distutils-precedence.pth"):
@@ -253,12 +255,14 @@ def main(packages):
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         archive.add(VENV, arcname=".")
     shutil.rmtree(VENV, ignore_errors=True)
-    return base64.b64encode(buffer.getvalue()).decode()
+    return {"archive": base64.b64encode(buffer.getvalue()).decode(), "installed": installed}
 """
 
 
 def run_build(image, packages, key):
-    """Install packages into a virtualenv in a microVM of `image`; return the packed venv."""
+    """Install packages into a virtualenv in a microVM of `image`.
+
+    Returns the packed venv and the installed distributions as name==version lines."""
     guest_disk = require_guest_disk()
     pool = f"python-build-{key[:12]}"
     core("POST", "/v1/pools", {
@@ -285,27 +289,32 @@ def run_build(image, packages, key):
     value = outcome["value"] or {}
     if value.get("encoding") != "json":
         raise ApiError(500, "the package build returned something other than JSON")
-    return base64.b64decode(value["data"])
+    data = value["data"]
+    return base64.b64decode(data["archive"]), data["installed"]
 
 
-def build_venv_disk(image, packages):
-    """Install packages into a virtualenv in a microVM of the image and return a core disk key."""
+def build_venv_disk(image, packages, fresh=False):
+    """Install packages into a virtualenv in a microVM of the image.
+
+    Returns {disk, installed}: the core disk key and the name==version lines pip installed. The
+    same image and package list reuse an earlier build unless `fresh` is set, so requirements
+    without a version keep what they resolved to the first time."""
     key = build_key(image, packages)
     with lock:
         key_lock = build_locks.setdefault(key, threading.Lock())
     # A second environment with the same packages waits here, then finds the first one's disk.
     with key_lock:
-        return build_venv_disk_once(image, packages, key)
+        return build_venv_disk_once(image, packages, key, fresh)
 
 
-def build_venv_disk_once(image, packages, key):
-    cache = DATA / "builds.json"
+def build_venv_disk_once(image, packages, key, fresh):
+    cache = DATA / "venv-builds.json"
     with lock:
         cached = json.loads(cache.read_text()) if cache.exists() else {}
     disks = {disk["key"] for disk in core("GET", "/v1/disks")}
-    if cached.get(key) in disks:
+    if not fresh and key in cached and cached[key]["disk"] in disks:
         return cached[key]
-    archive = run_build(image, packages, key)
+    archive, installed = run_build(image, packages, key)
     work = Path(tempfile.mkdtemp(prefix="python-plugin-", dir=DATA))
     try:
         root = work / "root"
@@ -325,19 +334,20 @@ def build_venv_disk_once(image, packages, key):
         shutil.rmtree(work, ignore_errors=True)
     with lock:
         cached = json.loads(cache.read_text()) if cache.exists() else {}
-        cached[key] = stored["key"]
+        cached[key] = {"disk": stored["key"], "installed": installed}
         cache.write_text(json.dumps(cached, indent=2, sort_keys=True))
-    return stored["key"]
+    return cached[key]
 
 
-def ensure_disk(environment, force=False):
-    if environment.get("venv_disk") and not force:
-        return environment["venv_disk"]
+def build_disk(environment, fresh=False):
+    """Give the environment a virtualenv disk for its image and packages, and its versions."""
     images = {image["id"]: image for image in core("GET", "/v1/images")}
     image = images.get(environment["image"])
     if image is None:
         raise ApiError(400, "unknown image")
-    return build_venv_disk(image, environment["packages"])
+    built = build_venv_disk(image, environment["packages"], fresh)
+    environment["venv_disk"] = built["disk"]
+    environment["installed"] = built["installed"]
 
 
 # --- Pools --------------------------------------------------------------------
@@ -415,7 +425,7 @@ def create_environment(request):
         # Held while the packages build, outside the lock; list and get show it as building.
         creating[environment["name"]] = {**environment, "status": "building", "started_at": time.time()}
     try:
-        environment["venv_disk"] = ensure_disk(environment)
+        build_disk(environment)
         apply_pool(environment)
         with lock:
             state = load_state()
@@ -452,13 +462,28 @@ def update_environment(key, request):
     rebuild = (environment["image"] != current["image"]
                or environment["packages"] != current["packages"])
     if rebuild:
-        environment["venv_disk"] = ensure_disk(environment, force=True)
+        build_disk(environment)
     apply_pool(environment)
     with lock:
         state = load_state()
         state[environment["id"]] = environment
         save_state(state)
         if rebuild:
+            unused_disk(current.get("venv_disk"), state)
+    return view(environment, pools_by_name())
+
+
+def rebuild_environment(key):
+    """Install the packages again, so requirements without a version get today's release."""
+    current = require_saved(key)
+    environment = dict(current)
+    build_disk(environment, fresh=True)
+    apply_pool(environment)
+    with lock:
+        state = load_state()
+        state[environment["id"]] = environment
+        save_state(state)
+        if environment["venv_disk"] != current.get("venv_disk"):
             unused_disk(current.get("venv_disk"), state)
     return view(environment, pools_by_name())
 
@@ -503,7 +528,7 @@ def reconcile():
     for environment in environments:
         try:
             if environment.get("venv_disk") not in disks:
-                environment["venv_disk"] = ensure_disk(environment, force=True)
+                build_disk(environment)
                 with lock:
                     state = load_state()
                     state[environment["id"]] = environment
@@ -925,6 +950,8 @@ def route(method, path, body, query=None):
             return 204, None
     if len(parts) == 3 and parts[0] == "environments" and parts[2] == "restart" and method == "POST":
         return 200, restart_environment(parts[1])
+    if len(parts) == 3 and parts[0] == "environments" and parts[2] == "rebuild" and method == "POST":
+        return 200, rebuild_environment(parts[1])
     raise ApiError(404, "not found")
 
 
