@@ -1,5 +1,5 @@
 name = "proxies"
-version = "0.3.6"
+version = "0.3.7"
 description = "Free public proxies collected from your sources, tested for protocol, speed, HTTPS support and anonymity in microVMs, and served through the Scraperack API. Data in SQLite on the controller."
 run = ["python3", "service.py"]
 gui = true

@@ -540,9 +540,12 @@ def reconcile():
 
 
 def capacity_report():
-    """Executions running now; the core adds each environment's pool as a stage by itself."""
+    """Executions running now, after the plugin's microVMs and the workers' hardware (``vms``).
+    Nothing per environment: only physical limits hold executions back."""
     pools = [pool for pool in core("GET", "/v1/capacity")["pools"] if pool["owner"] == PLUGIN]
     return {
+        "position": 40,
+        "vms": True,
         "output": {"label": "Executions running", "ready": sum(pool["active"] for pool in pools)},
         "queued": sum(pool["queued"] for pool in pools),
     }
